@@ -1,0 +1,53 @@
+"spring_dummy" "phase" "service_category" "pmpm" "spend_type" "pmpm_normalized"
+"Control" "pre_tx" "Office Visit" 1.95232117928211 "Mental Health" 0.0576950814118628
+"Control" "pre_tx" "Emergency Room" 0.783740624186641 "Mental Health" 0.0442478286289681
+"Control" "pre_tx" "Hospital Outpatient" 1.11408702647706 "Mental Health" 0.0213744570322376
+"Control" "pre_tx" "Hospital Inpatient" 1.80100963017296 "Mental Health" 0.0417159021937676
+"Control" "pre_tx" "Behavioral Health" 0.510387573054445 "Mental Health" 0.00271089738191138
+"Control" "pre_tx" "Other" 0.78514823841185 "Mental Health" 0.0745471540634271
+"Control" "pre_tx" "Office Visit" 101.059986513026 "Physical Health" 0.856524318316789
+"Control" "pre_tx" "Emergency Room" 44.6251780517237 "Physical Health" 0.765709894403673
+"Control" "pre_tx" "Hospital Outpatient" 173.658332347443 "Physical Health" 0.737070441674893
+"Control" "pre_tx" "Hospital Inpatient" 86.5023479166174 "Physical Health" 0.517724271501819
+"Control" "pre_tx" "Other" 42.767051794714 "Physical Health" 0.668001622661899
+"Control" "pre_tx" "Total" 6.94669427158508 "Mental Health" 0.0350517204882142
+"Control" "pre_tx" "Total" 448.650250337174 "Physical Health" 0.697631809255824
+"Control" "post_tx" "Office Visit" 33.8386068882588 "Mental Health" 1
+"Control" "post_tx" "Emergency Room" 17.7125216868505 "Mental Health" 1
+"Control" "post_tx" "Hospital Outpatient" 52.1223544905379 "Mental Health" 1
+"Control" "post_tx" "Hospital Inpatient" 43.1732153797704 "Mental Health" 1
+"Control" "post_tx" "Behavioral Health" 40.8051822268029 "Mental Health" 0.216734629734523
+"Control" "post_tx" "Other" 10.53223625068 "Mental Health" 1
+"Control" "post_tx" "Office Visit" 117.988461450371 "Physical Health" 1
+"Control" "post_tx" "Emergency Room" 58.2794846688998 "Physical Health" 1
+"Control" "post_tx" "Hospital Outpatient" 235.606154484812 "Physical Health" 1
+"Control" "post_tx" "Hospital Inpatient" 167.081886398122 "Physical Health" 1
+"Control" "post_tx" "Other" 64.0223771078474 "Physical Health" 1
+"Control" "post_tx" "Total" 198.184116922901 "Mental Health" 1
+"Control" "post_tx" "Total" 643.104635403246 "Physical Health" 1
+"Spring" "pre_tx" "Office Visit" 5.18759546018472 "Mental Health" 0.153304049345621
+"Spring" "pre_tx" "Emergency Room" 4.15716812939393 "Mental Health" 0.234702218175978
+"Spring" "pre_tx" "Hospital Outpatient" 7.48158571888067 "Mental Health" 0.14353890556189
+"Spring" "pre_tx" "Hospital Inpatient" 7.66903414051372 "Mental Health" 0.17763407411409
+"Spring" "pre_tx" "Behavioral Health" 0.0573041400542205 "Mental Health" 0.000304367996885179
+"Spring" "pre_tx" "Other" 0.996933327206727 "Mental Health" 0.0946554277247973
+"Spring" "pre_tx" "Office Visit" 104.442143546386 "Physical Health" 0.885189469059375
+"Spring" "pre_tx" "Emergency Room" 45.1866176538161 "Physical Health" 0.775343466239149
+"Spring" "pre_tx" "Hospital Outpatient" 169.003186141617 "Physical Health" 0.717312272725503
+"Spring" "pre_tx" "Hospital Inpatient" 108.397308735009 "Physical Health" 0.648767565843256
+"Spring" "pre_tx" "Other" 44.9727964894546 "Physical Health" 0.702454337390452
+"Spring" "pre_tx" "Total" 25.549620916234 "Mental Health" 0.128918610194042
+"Spring" "pre_tx" "Total" 472.002052566282 "Physical Health" 0.733942855613725
+"Spring" "post_tx" "Office Visit" 7.90920339078201 "Mental Health" 0.233733126688685
+"Spring" "post_tx" "Emergency Room" 4.4582142255656 "Mental Health" 0.251698448384982
+"Spring" "post_tx" "Hospital Outpatient" 7.3315634648852 "Mental Health" 0.140660634703602
+"Spring" "post_tx" "Hospital Inpatient" 5.23429068657722 "Mental Health" 0.121239306373966
+"Spring" "post_tx" "Behavioral Health" 188.272553752877 "Mental Health" 1
+"Spring" "post_tx" "Other" 2.79323752315724 "Mental Health" 0.265208399875849
+"Spring" "post_tx" "Office Visit" 107.343970695559 "Physical Health" 0.909783629484069
+"Spring" "post_tx" "Emergency Room" 50.3814450120698 "Physical Health" 0.864479933175445
+"Spring" "post_tx" "Hospital Outpatient" 163.816071408522 "Physical Health" 0.695296231826924
+"Spring" "post_tx" "Hospital Inpatient" 71.189774883512 "Physical Health" 0.426077155448685
+"Spring" "post_tx" "Other" 55.0174546679391 "Physical Health" 0.859347265023615
+"Spring" "post_tx" "Total" 27.7265092909673 "Mental Health" 0.139902781925525
+"Spring" "post_tx" "Total" 447.748716667602 "Physical Health" 0.696229963242062

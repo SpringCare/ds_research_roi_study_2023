@@ -19,8 +19,6 @@ elig[[i]] <- import(paste0(Sys.getenv("claims_folder_path"), "data/", customer_n
   mutate(carrier_member_id = as.character(carrier_member_id))
 }
 
-
-
 elig2 <- elig %>% 
   bind_rows() %>%
   mutate(carrier_member_id = as.character(carrier_member_id))
