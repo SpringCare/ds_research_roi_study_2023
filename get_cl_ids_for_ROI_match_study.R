@@ -30,3 +30,13 @@ matched_cl <- matched_ids %>%
 
 # Save
 saveRDS(matched_cl, paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2023/matched_cl_ids.Rdata"))
+write.table(matched_cl, paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2023/matched_cl_ids.csv"), col.names=T, row.names=F)
+                
+
+matched_cl %>%
+  filter(is.na(covered_life_id)) %>%
+  group_by(customer_name) %>%
+  summarize(n = n_distinct(carrier_member_id))
+
+unique(df_matched$spring_start_date[df_matched$customer_name == "DocuSign"])
+unique(df_matched$spring_start_date)  

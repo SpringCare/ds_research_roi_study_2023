@@ -1,0 +1,7 @@
+chronic_condition,Estimate,se,lb,ub
+Diabetes,732,146,446,1018
+Hypertension,642,83,478,805
+Asthma/COPD,237,124,-6,480
+Pregnancy,323,152,25,621
+Cancer,926,221,494,1359
+No chronic condition,90,43,6,174

@@ -54,7 +54,7 @@ library(gt)
 
 # Load data and functions
 
-## Load data 
+## Claims data 
 ``` {r load-data}
 
 # Customers included in the study
@@ -86,6 +86,150 @@ df_matched <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2
 ```
 
 
+## Billing data
+``` {r billing-data}
+
+# direct bill
+
+## all direct bill appts
+billing_appts <- readRDS('~/Library/CloudStorage/GoogleDrive-mhawrilenko@springhealth.com/Shared drives/ROI - Direct bill/HEOR clean/billing data.Rdata')
+
+# Loop stuff
+spring_fees <- list()
+prop_matched <- vector()
+for (i in 1:length(customer_name)) {
+  
+  ## Get covered life IDs for members in the study
+spring_match_to_elig <- import(paste0(Sys.getenv("claims_folder_path"), "data/", customer_name[i], "/data_to_sba/", customer_name[i], "_", "eligibility_cls.csv")) %>%
+  rename(any_of(c(
+    carrier_member_id = "member_key",
+    carrier_member_id = "indv_id",
+    carrier_member_id = "individual_id"
+  ))) %>%
+  mutate(carrier_member_id = as.character(carrier_member_id)) %>%
+  select(carrier_member_id, covered_life_id)
+
+
+## Need members in the study
+study_members <- df_matched %>%
+  distinct(carrier_member_id, spring_dummy) %>%
+  left_join(spring_match_to_elig)
+
+
+## Match study members to their appts
+apps_query <- "SELECT appointment_id, covered_life_id 
+               FROM base_appointments 
+               WHERE UPPER(customer_name) like ?"
+
+
+apps <- dbGetQuery(con = snowflake_conn("base_layer"), apps_query, params = list(paste0('%', str_to_upper(customer_name[i]), '%'))) %>%
+  clean_names()
+
+
+## Calculate direct bill amounts by group
+spring_start_date <- df_matched %>%
+  ungroup() %>%
+  filter(str_like(customer_name, paste0('%', .env$customer_name[i], '%'), ignore_case = TRUE)) %>%
+  distinct(spring_start_date) %>%
+  pull(spring_start_date) 
+
+spring_end_date <- df_matched %>%
+  ungroup() %>%
+  filter(str_like(customer_name, paste0('%', .env$customer_name[i], '%'), ignore_case = TRUE)) %>%
+  distinct(spring_end_date) %>%
+  pull(spring_end_date) 
+
+direct_bill <- billing_appts %>%
+  filter(str_like(customer_name, paste0('%', .env$customer_name[i], '%'), ignore_case = TRUE)) %>% #.env$customer_name
+  filter(month_of_service <= spring_end_date) %>%
+  left_join(apps) %>% # get covered life id
+  inner_join(study_members) %>% # only individuals included in the study
+  ## sometimes an individual has multiple carrier member IDs. DOn't want duplicate billing. 
+  ## so group by appointment_id and take first carrier_member_id
+  group_by(appointment_id) %>% 
+  filter(carrier_member_id == first(carrier_member_id) | is.na(carrier_member_id)) %>% # address billing data that gets duped
+  ungroup() %>%
+  summarize(amount = sum(total_billed, na.rm=T)) %>%
+  pull(amount)
+
+
+billing_all <- import(paste0(Sys.getenv("claims_folder_path"), "data/", customer_name[i], "/", customer_name[i], "_", "billing.xlsx")) %>%
+  clean_names()
+
+bundle_fee <- billing_all %>%
+  filter(str_like(account, paste0('%', "bundle", '%'), ignore_case = TRUE)) %>%
+  summarize(bundle_fee = sum(amount, na.rm=T)) %>%
+  pull(bundle_fee)
+
+platform_fee <- billing_all %>%
+  filter(str_like(account, paste0('%', "platform", '%'), ignore_case = TRUE)) %>%
+  summarize(platform_fee = sum(amount, na.rm=T)) %>%
+  pull(platform_fee)
+
+billed_to_health_plan <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/round_2_analysis/intermediate_data/", customer_name[i], "_spring_med_claims.Rdata")) %>%
+  filter(month_year <= spring_end_date) %>%
+  mutate(carrier_member_id = as.character(carrier_member_id)) %>%
+  inner_join(study_members) %>%
+  ungroup() %>%
+  summarize(billed_to_health_plan = sum(allowed_amt, na.rm=T)) %>%
+  pull(billed_to_health_plan)
+
+
+## Get number of eligible employees on the health plan in the date range
+elig <- readRDS(file = paste0(Sys.getenv("claims_folder_path"), "/data/round_2_analysis/intermediate_data/", customer_name[i], "_carrier_elig.Rdata")) %>%
+  filter(month_year >= spring_start_date) %>%
+  filter(month_year <= spring_end_date) %>%
+  filter(employee_flag == "yes") 
+
+## Get total employees
+qry <- "SELECT DISTINCT a.customer_name, a.customer_id, id, dependent, b.created_at
+                  FROM ds_trunk.base_layer.base_customers AS a
+                  LEFT JOIN stitch_new.rotom_prod_replica.covered_lives AS b
+                  ON a.customer_id = b.customer_id
+                  WHERE UPPER(a.customer_name) LIKE ?
+                  AND dependent = 'FALSE'
+                  AND DATE(b.created_at) <= date(?)"
+
+cl <- dbGetQuery(con = snowflake_conn("rotom"), qry, params = list(paste0('%', str_to_upper(customer_name[i]), '%'), spring_end_date)) %>%
+  clean_names()
+
+prop_on_health_plan <- n_distinct(elig$carrier_member_id) / n_distinct(cl$id)
+
+cust_funnel <- data_funnel %>%
+  filter(customer_name == .env$customer_name[i]) 
+prop_matched <- pull(cust_funnel[7,4] / cust_funnel[1,4])
+
+# Compile all fees
+spring_fees[[i]] <- data.frame(
+  fee_type = c("Bundle", "Platform", "Direct bill", "Billed to Health Plan")
+) %>%
+  mutate(
+    customer_name = customer_name[i],
+    prop_on_health_plan = prop_on_health_plan,
+    prop_matched = prop_matched,
+    Amount = case_when(
+      fee_type == "Bundle" ~ bundle_fee * prop_on_health_plan * prop_matched,
+      fee_type == "Platform" ~ platform_fee * prop_on_health_plan * prop_matched,
+      fee_type == "Direct bill" ~ direct_bill,
+      fee_type == "Billed to Health Plan" ~ billed_to_health_plan
+    )
+)
+}
+spring_fees <- spring_fees %>% bind_rows()
+
+spring_fees %>%
+  group_by(customer_name) %>%
+  summarize(amount = sum(Amount, na.rm=T)) 
+
+total_invoiced <- spring_fees %>%
+  summarize(amount = sum(Amount, na.rm=T)) %>%
+  pull(amount)
+
+# Get monthly Spring costs
+member_months <- df_matched %>% ungroup() %>% filter(spring_dummy == "Spring", months_post>=1) %>% summarize(n=n()) %>% pull()
+spring_pmpm_adjustment <- total_invoiced/member_months
+```
+
 
 # Analyze utilization pre and post launch
 Spring promises to drive value by getting more people into care who otherwise would never have received it. Here, we test this premise by determining how much mental health treatment utilization changed after Spring launched. Here, we examine 3 metrics:  
@@ -94,9 +238,23 @@ Spring promises to drive value by getting more people into care who otherwise wo
   3. Number of sessions per month 
   
   
-## Annual utilization
+# Annual utilization
 
 ``` {r cust-avg-utilization, fig.width = 10, fig.height = 5}
+
+df_phase_summary <- df_care_use %>%
+  filter(month_year >= baseline_start_date) %>%
+  filter(month_year <= spring_end_date) %>%
+  mutate(phase = ifelse(month_year < spring_start_date, "Pre-launch", "Post-launch")) %>%
+  mutate(phase = factor(phase, levels = c("Pre-launch", "Post-launch"))) %>%
+  group_by(customer_name, carrier_member_id, phase) %>%
+  summarize(
+    carrier_tx_count_month = sum(carrier_tx_count_month),
+    spring_tx_count_month = sum(spring_tx_count_month),
+    carrier_therapist_count_month = sum(carrier_therapist_count_month),
+    spring_therapist_count_month = sum(spring_therapist_count_month)
+  ) %>%
+  ungroup()
 
 care_use_avg <- df_phase_summary %>%
   mutate(
@@ -119,6 +277,9 @@ care_use_avg <- df_phase_summary %>%
   
 
 # Plot
+color_scheme <- c("#37837c","#A9DbD6", '#c7c7c7') # set colors
+
+## plot
 ggplot(care_use_avg, aes(x = phase, y=proportion, group = mh_appt_group, fill = mh_appt_group)) +
   geom_bar(position="stack", stat="identity", width = 0.5) +
   scale_fill_manual(values = color_scheme, name = "Provider") +
@@ -266,6 +427,8 @@ df_unmatched_table <- df_analyze_all %>%
 table1( ~ age_at_index + member_sex + mh_dx + dx_collapsed + risk_score_dx + cc_any + cc_asthma_copd + cc_diabetes + cc_hypertension + cc_heart
         + cc_stroke + cc_kidney + cc_osteo + cc_cancer | spring_dummy,
         overall = F,
+        render.missing = NULL,
+       render.categorical = "FREQ (PCTnoNA%)",
         data=df_unmatched_table)
 ```
 
@@ -445,40 +608,34 @@ tab_model(m1_gross_no_match, m1_gross_yes_match, m1_mh, m1_nonmh,
           dv.labels = c("Unmatched", "Matched", "Mental Health Spend", "Physical Health Spend"),
           title = "Spring effect on gross medical spending")
 
-# Main model
-tab_model(m1_gross_yes_match,  
-          #show.ci=T, 
-          show.se=T, 
-          pred.labels = c("Baseline PMPM", "Baseline difference (Spring - Control)", "Control pre-post change", "Hearst", "DocuSign", "Tegna", "Wellstar", "Diff-in-diff (Spring change - Control change)"),
-          dv.labels = c("Matched"),
-          title = "Spring effect on gross medical spending")
+
 # raw with bootstrapped SEs. 
 # Use residuals because we trust the shape of the regression (all binary) but not the noise
 
-set.seed(8102018)
-numCores <- 5
-cl <- makeCluster(numCores, type = "PSOCK") # make a socket cluster
-doParallel::registerDoParallel(cl)          # how the CPU knows to run in parallel
-
-# 5000 total resamples
-m1_boot <- foreach(B = rep(1000, 5), 
-                       .combine = combine_lmeresamp,
-                       .packages = c("lmeresampler", "lme4")) %dopar% {
-                         bootstrap(m1_gross_yes_match, .f = fixef, type = "residual", B = B)
-                       }
-stopCluster(cl)
-
-
-m1_boot$stats %>%
-  data.frame() %>%
-  mutate(
-    lb_95 = observed - 1.96*se,
-    ub_95 = observed + 1.96*se
-  ) %>%
-  mutate(across(observed:ub_95, ~round(.x, 2))) %>%
-  select(-c(rep.mean, bias)) %>%
-  kableone() %>%
-  kable_classic(full_width = FALSE, html_font = "Cambria")
+#set.seed(8102018)
+#numCores <- 5
+#cl <- makeCluster(numCores, type = "PSOCK") # make a socket cluster
+#doParallel::registerDoParallel(cl)          # how the CPU knows to run in parallel
+#
+## 5000 total resamples
+#m1_boot <- foreach(B = rep(1000, 5), 
+#                       .combine = combine_lmeresamp,
+#                       .packages = c("lmeresampler", "lme4")) %dopar% {
+#                         bootstrap(m1_gross_yes_match, .f = fixef, type = "residual", B = B)
+#                       }
+#stopCluster(cl)
+#
+#
+#m1_boot$stats %>%
+#  data.frame() %>%
+#  mutate(
+#    lb_95 = observed - 1.96*se,
+#    ub_95 = observed + 1.96*se
+#  ) %>%
+#  mutate(across(observed:ub_95, ~round(.x, 2))) %>%
+#  select(-c(rep.mean, bias)) %>%
+#  kableone() %>%
+#  kable_classic(full_width = FALSE, html_font = "Cambria")
 ```
 
 
@@ -499,7 +656,7 @@ df_plot <- df_matched %>%
 df_plot_total <- predictions(m1_gross_yes_match, newdata = df_plot, re.form = ~0)
 df_plot_mh <- predictions(m1_mh, newdata = df_plot, re.form = ~0) %>%
   mutate(across(c(estimate, conf.low, conf.high), ~
-                  ifelse(spring_dummy == "Spring" & phase == "post_tx", .x + spring_cost_adjustment, .x)))
+                  ifelse(spring_dummy == "Spring" & phase == "post_tx", .x + spring_pmpm_adjustment, .x)))
 df_plot_nonmh <- predictions(m1_nonmh, newdata = df_plot, re.form = ~0)
 
 color_scheme <- c('#c7c7c7', "#37837c")
@@ -571,19 +728,7 @@ m1_rx_truncate2.5k <- lmer(rx_pmpm_trunc2.5k ~ 1 + spring_dummy + spring_dummy*p
            weights = weights_nn,
            data = df_matched)
 
-# Sensitivity: any baseline pharm spend
-df_matched <- df_matched %>%
-  group_by(carrier_member_id) %>%
-  mutate(rx_baseline = mean(rx_pmpm_trunc[phase == "pre_tx"])) %>%
-  mutate(rx_any_spend = ifelse(rx_baseline > 0, "yes", "no"))
-
-m1_rx_base_yes <- lmer(rx_pmpm_trunc ~ 1 + spring_dummy + spring_dummy*phase + customer_name +
-             (1 | carrier_member_id) +
-             (1 | subclass_nn),
-           weights = weights_nn,
-           data = filter(df_matched, rx_any_spend == "yes"))
-
-tab_model(m1_rx_yes_match, m1_rx_base_yes, m1_rx_truncate10k, m1_rx_truncate5k, m1_rx_truncate2.5k, show.ci=F, show.se=T, 
+tab_model(m1_rx_yes_match, m1_rx_truncate10k, m1_rx_truncate5k, m1_rx_truncate2.5k, show.ci=F, show.se=T, 
           pred.labels = c("Baseline PMPM", "Baseline difference (Spring - Control)", "Control pre-post change", "Hearst", "DocuSign", "Tegna", "Wellstar", "Diff-in-diff (Spring change - Control change)"),
           dv.labels = c("Matched - Standard truncation", "Any baseline pharm spend", "Truncate 10k", "Truncate 5k", "Truncate 2.5k"),
           title = "Spring effect on gross pharmacy spending")
@@ -657,7 +802,6 @@ tab_model(m1, m2, m3, m4, m5, m_no_cc,
           dv.labels = c("Diabetes", "Hypertension", "Asthma/COPD", "Pregnancy", "Cancer"),
           show.ci=F, 
           show.se=T)
-tab_model(m2, show.ci=F, show.se=T)
 ```
 
 
@@ -921,9 +1065,7 @@ cc10 <- lmer(med_pmpm_trunc_therapy_nonmh ~ 1 + spring_dummy + spring_dummy*phas
 
 ## Spring therapy cost
 ### For this to work, need to move code for total invoiced up higher. for now, we'll do it the old fashioned way: hard-coding!!
-hardcode_total_invoiced <- 4632774
-member_months <- df_matched %>% ungroup() %>% filter(spring_dummy == "Spring", months_post>=1) %>% summarize(n=n()) %>% pull()
-spring_cost_adjustment <- hardcode_total_invoiced/member_months
+
 
 # Make in table
 df_cost_results <- data.frame(
@@ -943,7 +1085,7 @@ for (i in 1:10) {
 df_cost_results <- df_cost_results %>%
     mutate(
       estimate = case_when(
-        outcome == "Therapy" & spend_type == "Mental healthcare savings" ~ estimate + spring_cost_adjustment,
+        outcome == "Therapy" & spend_type == "Mental healthcare savings" ~ estimate + spring_pmpm_adjustment,
         TRUE ~ estimate
       )) %>%
   mutate(
@@ -1109,7 +1251,7 @@ for (i in 11:16) {
 df_plot_cost_results_collapsed <- df_cost_results_collapsed %>%
     mutate(
       estimate = case_when(
-        outcome == "Therapy" ~ estimate + spring_cost_adjustment,
+        outcome == "Therapy" ~ estimate + spring_pmpm_adjustment,
         TRUE ~ estimate
       )) %>%
   mutate(
@@ -1426,145 +1568,6 @@ df_monthly_spend %>%
 ```
 
 # ROI
-## Billing data
-``` {r billing-data}
-
-# direct bill
-
-## all direct bill appts
-billing_appts <- readRDS('~/Library/CloudStorage/GoogleDrive-mhawrilenko@springhealth.com/Shared drives/ROI - Direct bill/HEOR clean/billing data.Rdata')
-
-# Loop stuff
-spring_fees <- list()
-prop_matched <- vector()
-for (i in 1:length(customer_name)) {
-  
-  ## Get covered life IDs for members in the study
-spring_match_to_elig <- import(paste0(Sys.getenv("claims_folder_path"), "data/", customer_name[i], "/data_to_sba/", customer_name[i], "_", "eligibility_cls.csv")) %>%
-  rename(any_of(c(
-    carrier_member_id = "member_key",
-    carrier_member_id = "indv_id",
-    carrier_member_id = "individual_id"
-  ))) %>%
-  mutate(carrier_member_id = as.character(carrier_member_id)) %>%
-  select(carrier_member_id, covered_life_id)
-
-
-## Need members in the study
-study_members <- df_matched %>%
-  distinct(carrier_member_id, spring_dummy) %>%
-  left_join(spring_match_to_elig)
-
-
-## Match study members to their appts
-apps_query <- "SELECT appointment_id, covered_life_id 
-               FROM base_appointments 
-               WHERE UPPER(customer_name) like ?"
-
-
-apps <- dbGetQuery(con = snowflake_conn("base_layer"), apps_query, params = list(paste0('%', str_to_upper(customer_name[i]), '%'))) %>%
-  clean_names()
-
-
-## Calculate direct bill amounts by group
-spring_start_date <- df_matched %>%
-  ungroup() %>%
-  filter(str_like(customer_name, paste0('%', .env$customer_name[i], '%'), ignore_case = TRUE)) %>%
-  distinct(spring_start_date) %>%
-  pull(spring_start_date) 
-
-spring_end_date <- df_matched %>%
-  ungroup() %>%
-  filter(str_like(customer_name, paste0('%', .env$customer_name[i], '%'), ignore_case = TRUE)) %>%
-  distinct(spring_end_date) %>%
-  pull(spring_end_date) 
-
-direct_bill <- billing_appts %>%
-  filter(str_like(customer_name, paste0('%', .env$customer_name[i], '%'), ignore_case = TRUE)) %>% #.env$customer_name
-  filter(month_of_service <= spring_end_date) %>%
-  left_join(apps) %>% # get covered life id
-  inner_join(study_members) %>% # only individuals included in the study
-  ## sometimes an individual has multiple carrier member IDs. DOn't want duplicate billing. 
-  ## so group by appointment_id and take first carrier_member_id
-  group_by(appointment_id) %>% 
-  filter(carrier_member_id == first(carrier_member_id) | is.na(carrier_member_id)) %>% # address billing data that gets duped
-  ungroup() %>%
-  summarize(amount = sum(total_billed, na.rm=T)) %>%
-  pull(amount)
-
-
-billing_all <- import(paste0(Sys.getenv("claims_folder_path"), "data/", customer_name[i], "/", customer_name[i], "_", "billing.xlsx")) %>%
-  clean_names()
-
-bundle_fee <- billing_all %>%
-  filter(str_like(account, paste0('%', "bundle", '%'), ignore_case = TRUE)) %>%
-  summarize(bundle_fee = sum(amount, na.rm=T)) %>%
-  pull(bundle_fee)
-
-platform_fee <- billing_all %>%
-  filter(str_like(account, paste0('%', "platform", '%'), ignore_case = TRUE)) %>%
-  summarize(platform_fee = sum(amount, na.rm=T)) %>%
-  pull(platform_fee)
-
-billed_to_health_plan <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/round_2_analysis/intermediate_data/", customer_name[i], "_spring_med_claims.Rdata")) %>%
-  filter(month_year <= spring_end_date) %>%
-  mutate(carrier_member_id = as.character(carrier_member_id)) %>%
-  inner_join(study_members) %>%
-  ungroup() %>%
-  summarize(billed_to_health_plan = sum(allowed_amt, na.rm=T)) %>%
-  pull(billed_to_health_plan)
-
-
-## Get number of eligible employees on the health plan in the date range
-elig <- readRDS(file = paste0(Sys.getenv("claims_folder_path"), "/data/round_2_analysis/intermediate_data/", customer_name[i], "_carrier_elig.Rdata")) %>%
-  filter(month_year >= spring_start_date) %>%
-  filter(month_year <= spring_end_date) %>%
-  filter(employee_flag == "yes") 
-
-## Get total employees
-qry <- "SELECT DISTINCT a.customer_name, a.customer_id, id, dependent, b.created_at
-                  FROM ds_trunk.base_layer.base_customers AS a
-                  LEFT JOIN stitch_new.rotom_prod_replica.covered_lives AS b
-                  ON a.customer_id = b.customer_id
-                  WHERE UPPER(a.customer_name) LIKE ?
-                  AND dependent = 'FALSE'
-                  AND DATE(b.created_at) <= date(?)"
-
-cl <- dbGetQuery(con = snowflake_conn("rotom"), qry, params = list(paste0('%', str_to_upper(customer_name[i]), '%'), spring_end_date)) %>%
-  clean_names()
-
-prop_on_health_plan <- n_distinct(elig$carrier_member_id) / n_distinct(cl$id)
-
-cust_funnel <- data_funnel %>%
-  filter(customer_name == .env$customer_name[i]) 
-prop_matched <- pull(cust_funnel[7,4] / cust_funnel[1,4])
-
-# Compile all fees
-spring_fees[[i]] <- data.frame(
-  fee_type = c("Bundle", "Platform", "Direct bill", "Billed to Health Plan")
-) %>%
-  mutate(
-    customer_name = customer_name[i],
-    prop_on_health_plan = prop_on_health_plan,
-    prop_matched = prop_matched,
-    Amount = case_when(
-      fee_type == "Bundle" ~ bundle_fee * prop_on_health_plan * prop_matched,
-      fee_type == "Platform" ~ platform_fee * prop_on_health_plan * prop_matched,
-      fee_type == "Direct bill" ~ direct_bill,
-      fee_type == "Billed to Health Plan" ~ billed_to_health_plan
-    )
-)
-}
-spring_fees <- spring_fees %>% bind_rows()
-
-spring_fees %>%
-  group_by(customer_name) %>%
-  summarize(amount = sum(Amount, na.rm=T)) 
-
-total_invoiced <- spring_fees %>%
-  summarize(amount = sum(Amount, na.rm=T)) %>%
-  pull(amount)
-```
 
 ## Calculate ROI
 ``` {r calculate-roi}
@@ -1606,21 +1609,21 @@ deltamethod(m1_gross_yes_match, "0 = (-1*b8*12*3640)/total_invoiced")
 ``` {r net-pmpm}
 
 # Hypothesis test including spring costs
-hypotheses(m1_gross_yes_match, "b8 + spring_cost_adjustment = 0")
-hypotheses(m1_mh, "b8 + spring_cost_adjustment = 0")
+hypotheses(m1_gross_yes_match, "b8 + spring_pmpm_adjustment = 0")
+hypotheses(m1_mh, "b8 + spring_pmpm_adjustment = 0")
 hypotheses(m1_nonmh, "b8 = 0")
 
 # First Program-year PMPY
-hypotheses(m1_gross_yes_match, "0 = -1 * (b8 + spring_cost_adjustment) * mean_months_treated")
+hypotheses(m1_gross_yes_match, "0 = -1 * (b8 + spring_pmpm_adjustment) * mean_months_treated")
 
 # First program year net savings %
-hypotheses(m1_gross_yes_match, "0 = (6.5*(b8 + spring_cost_adjustment)) / ((12-6.5)*df_plot_total$estimate[1] + 6.5*(df_plot_total$estimate[3]))")
+hypotheses(m1_gross_yes_match, "0 = (6.5*(b8 + spring_pmpm_adjustment)) / ((12-6.5)*df_plot_total$estimate[1] + 6.5*(df_plot_total$estimate[3]))")
 
 # Plot
 df_plot_net <- df_plot_total %>%
   mutate(
     estimate = case_when(
-      spring_dummy == "Spring" & phase == "post_tx" ~ estimate + spring_cost_adjustment,
+      spring_dummy == "Spring" & phase == "post_tx" ~ estimate + spring_pmpm_adjustment,
       TRUE ~ estimate)
     ) %>%
   mutate(
@@ -1649,7 +1652,7 @@ ggplot(df_plot_net, aes(x=phase_label, y=estimate, ymin=conf.low, ymax=conf.high
 
 df_plot_mh <- predictions(m1_mh, newdata = df_plot, re.form = ~0) %>%
   mutate(across(c(estimate, conf.low, conf.high), ~
-                  ifelse(spring_dummy == "Spring" & phase == "post_tx", .x + spring_cost_adjustment, .x)))
+                  ifelse(spring_dummy == "Spring" & phase == "post_tx", .x + spring_pmpm_adjustment, .x)))
 df_plot_nonmh <- predictions(m1_nonmh, newdata = df_plot, re.form = ~0)
 
 
@@ -1689,7 +1692,7 @@ ggplot(df_plot_nonmh, aes(x=phase_label, y=estimate, ymin=conf.low, ymax=conf.hi
 ## Make barplots
 df_bar_plot <- rbind(
   hypotheses(m1_mh, "b3 = 0"),
-  hypotheses(m1_mh, "b3 + b8 + spring_cost_adjustment = 0"),
+  hypotheses(m1_mh, "b3 + b8 + spring_pmpm_adjustment = 0"),
   hypotheses(m1_nonmh, "b3 = 0"),
   hypotheses(m1_nonmh, "b3 + b8 = 0")
 ) %>%
@@ -1710,6 +1713,51 @@ ggplot(df_bar_plot, aes(x=spend_type, y=estimate, ymin=conf.low, ymax=conf.high,
     y = "PMPM allowed amount",
     fill = ""
   )
+```
+
+## Net chronic conditions
+``` {r net-chronic-conditions}
+## Make it nice
+df_plot_cc_net <- df_cc_results %>%
+  mutate(
+    Estimate = -1*Estimate - spring_pmpm_adjustment,
+    lb = -1*lb - spring_pmpm_adjustment,
+    ub = -1*ub - spring_pmpm_adjustment
+  ) %>%
+  mutate(chronic_condition = fct_reorder(as.factor(chronic_condition), Estimate))
+
+# Make dotplot
+ggplot(df_plot_cc_net, aes(x=Estimate, xmin=lb, xmax=ub, y=chronic_condition)) +
+  geom_pointrange(position = position_dodge(width=0.5)) +
+  geom_text(aes(x=Estimate, y=chronic_condition, label = round(Estimate, 0), fill = NULL, vjust = -1), colour = "#8e8e8e", size = 3) +
+  geom_vline(xintercept = 344 - spring_pmpm_adjustment, linetype = "dashed", color = "grey") +
+  annotate(geom = "text", x=344 - spring_pmpm_adjustment, y=6.5, label = paste0("Population average = ", round(344 - spring_pmpm_adjustment, 0)), hjust=-0.07, color = "grey") +
+  expand_limits(y = c(1, 6.7)) +
+  theme_modern() +
+  theme(legend.position = "bottom") +
+  labs(
+    x = "PMPM savings",
+    y = "",
+    fill = " "
+  )
+
+```
+## Do session counts differ for individuals with chronic conditoins?
+``` {r cc-session-counts}
+df_cc_table <- df_match_table %>%
+  mutate(cc_group = case_when(
+    cc_cancer == "yes" ~ "Cancer",
+    cc_hypertension == "yes" ~ "Hypertension",
+    excl_pregnancy == "yes" ~ "Pregnancy",
+    cc_diabetes == "yes" ~ "Diabetes",
+    cc_asthma_copd == "yes" ~ "Asthma/COPD",
+    TRUE ~ "No chronic condition"
+  )) 
+
+table1( ~ age_at_index + member_sex + dx_imputed + risk_score_dx + months_diagnosed + any_bh + bh_if_engaged | spring_dummy*cc_group,
+        overall = T,
+        footnote = "This table is based on raw values. In cases where 2 matches were not achieved, weights were applied.",
+        data=df_cc_table)
 ```
 
 ## Participant-year trajectories

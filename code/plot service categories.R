@@ -1,5 +1,34 @@
 
-# Mental health vs Physical health
+# SPlit to MH and PH
+df_matched <- df_matched %>%
+  mutate(
+    med_pmpm_trunc_mh = 
+      med_pmpm_trunc_therapy_mh + 
+      med_pmpm_trunc_ov_mh + 
+      med_pmpm_trunc_er_mh + 
+      med_pmpm_trunc_ip_mh + 
+      med_pmpm_trunc_hosp_op_mh + 
+      med_pmpm_trunc_other_mh,
+    med_pmpm_trunc_nonmh = 
+      med_pmpm_trunc_therapy_nonmh + 
+      med_pmpm_trunc_ov_nonmh + 
+      med_pmpm_trunc_er_nonmh + 
+      med_pmpm_trunc_ip_nonmh + 
+      med_pmpm_trunc_hosp_op_nonmh + 
+      med_pmpm_trunc_other_nonmh
+  )
+
+# Make binary indicator variablers
+df_matched <- df_matched %>%
+  mutate(
+    Hearst = ifelse(customer_name == "Hearst", 1, 0),
+    Pepsi = ifelse(customer_name == "Pepsi", 1, 0),
+    Tegna = ifelse(customer_name == "Tegna", 1, 0),
+    Wellstar = ifelse(customer_name == "Wellstar", 1, 0),
+    DocuSign = ifelse(customer_name == "DocuSign", 1, 0)
+  )
+
+# Model Mental health vs Physical health
 m1_mh <- lmer(med_pmpm_trunc_mh ~ 1 + spring_dummy + spring_dummy*phase + Hearst + DocuSign + Tegna + Wellstar +
                 (1 | carrier_member_id) +
                 (1 | subclass_nn),
@@ -114,6 +143,20 @@ y_cat <- 275
 
 
 # Overall MH
+df_plot <- df_matched %>%
+  ungroup() %>%
+  distinct(spring_dummy, phase) %>%
+  cbind(cust_recode) %>%
+  mutate(
+    phase_label = case_when(
+      phase == "pre_tx" ~ "Before MH diagnosis",
+      phase == "post_tx" ~ "After MH diagnosis"
+    )
+  ) %>%
+  mutate(phase_label = factor(phase_label, levels = c("Before MH diagnosis", "After MH diagnosis")))
+
+# spring_cost_adjustment <- # total fees for study members / total member months for individuals in the study. Not programmed for ROI template yet.
+
 df_plot_mh <- predictions(m1_mh, newdata = df_plot, re.form = ~0) %>%
   mutate(spend_category = "Mental Health - Overall") %>%
   filter(phase == "post_tx") %>%

@@ -32,7 +32,7 @@ df_service_cat_monthly <- df_matched %>%
   ) %>%
   filter(months >= -5, months <= 6) %>%
   mutate(spring_dummy = ifelse(spring_dummy == "Spring", "Spring", "Control"))
-write.table(df_service_cat_monthly, file = "code/output/monthly spend table - service categories.csv", row.names = F, col.names = T)
+#write.table(df_service_cat_monthly, file = "code/output/monthly spend table - service categories.csv", row.names = F, col.names = T)
 
 df_service_cat_summary <-  df_service_cat_monthly %>%
   group_by(spring_dummy, phase) %>%
@@ -61,7 +61,7 @@ df_service_cat_summary <-  df_service_cat_monthly %>%
   group_by(service_category, spend_type) %>%
   mutate(pmpm_normalized = pmpm / max(pmpm)) %>%
   mutate(spring_dummy = ifelse(spring_dummy == "Spring", "Spring", "Control"))
-write.table(df_service_cat_summary, file = "code/output/summary spend table - service categories.csv", row.names = F, col.names = T)
+#write.table(df_service_cat_summary, file = "code/output/summary spend table - service categories.csv", row.names = F, col.names = T)
 
 ggplot(filter(df_service_cat_summary, phase =="post_tx"), (aes(x=service_category, y=pmpm, group=spring_dummy, fill=spring_dummy))) +
   geom_bar(stat = "identity", position = position_dodge()) +
