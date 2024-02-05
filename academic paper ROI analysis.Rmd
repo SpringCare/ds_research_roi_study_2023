@@ -83,7 +83,7 @@ df_appts <- df_appts %>% bind_rows()
 
 # Now the dfs that have previously been concatenated
 df_analyze_all <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2023/df_analyze_all.Rdata"))
-df_matched <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2023/df_matched.Rdata"))
+df_matched_orig <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2023/df_matched.Rdata"))
 
 ```
 
@@ -113,7 +113,7 @@ spring_match_to_elig <- import(paste0(Sys.getenv("claims_folder_path"), "data/",
 
 
 ## Need members in the study
-study_members <- df_matched %>%
+study_members <- df_matched_orig %>%
   distinct(carrier_member_id, spring_dummy) %>%
   left_join(spring_match_to_elig)
 
@@ -129,13 +129,13 @@ apps <- dbGetQuery(con = snowflake_conn("base_layer"), apps_query, params = list
 
 
 ## Calculate direct bill amounts by group
-spring_start_date <- df_matched %>%
+spring_start_date <- df_matched_orig %>%
   ungroup() %>%
   filter(str_like(customer_name, paste0('%', .env$customer_name[i], '%'), ignore_case = TRUE)) %>%
   distinct(spring_start_date) %>%
   pull(spring_start_date) 
 
-spring_end_date <- df_matched %>%
+spring_end_date <- df_matched_orig %>%
   ungroup() %>%
   filter(str_like(customer_name, paste0('%', .env$customer_name[i], '%'), ignore_case = TRUE)) %>%
   distinct(spring_end_date) %>%
@@ -228,9 +228,9 @@ total_invoiced <- spring_fees %>%
   pull(amount)
 
 # Get monthly Spring costs
-member_months <- df_matched %>% ungroup() %>% filter(spring_dummy == "Spring", months_post>=1) %>% summarize(n=n()) %>% pull()
+member_months <- df_matched_orig %>% ungroup() %>% filter(spring_dummy == "Spring", months_post>=1) %>% summarize(n=n()) %>% pull()
 spring_pmpm_adjustment <- total_invoiced/member_months
-effective_session_fee <- sum(spring_fees$Amount) / sum(df_matched$spring_tx_count_month, na.rm = T)
+effective_session_fee <- sum(spring_fees$Amount) / sum(df_matched_orig$spring_tx_count_month, na.rm = T)
 
 ```
 
@@ -413,7 +413,7 @@ To determine Spring's impact on `r customer_name`'s total cost of care, we condu
 This table shows each step where participants were funneled into the analytic sample.
 ```{r data-funnel}
 
-match_funnel <- df_matched %>% 
+match_funnel <- df_matched_orig %>% 
   group_by(spring_dummy) %>%
   summarize(
     n = n_distinct(carrier_member_id),
@@ -477,7 +477,7 @@ table1( ~ age_at_index + member_sex + mh_dx + dx_collapsed + risk_score_dx + cc_
 We matched on age, sex, mental health diagnosis, and medical spending risk scores (Department of Health and Human Services - Hierarchal Condition Categories - platinum tier). We matched on a ratio to include as many relevant participants from the comparison condition as possible. In total, we matched X spring participants to Y participants in the comparison group. After matching, the groups were essentially identical across all key characteristics. 
 
 ``` {r compare-match-groups}
-df_match_table <- df_matched %>%
+df_match_table <- df_matched_orig %>%
   group_by(carrier_member_id) %>%
   arrange(months) %>%
   mutate(
@@ -533,7 +533,7 @@ render.cont <- function(x) {
         "Mean (SD)"=sprintf("%s (%s)", MEAN, SD)))
 }
 
-table1( ~ age_at_index + member_sex + dx_imputed + risk_score_dx + months_diagnosed + any_bh + bh_if_engaged | spring_dummy,
+table1( ~ age_at_index + age_factor + member_sex + dx_imputed + risk_score_dx + months_diagnosed + any_bh + bh_if_engaged | spring_dummy,
         overall = F,
         render.continuous = render.cont,
         footnote = "This table is based on raw values. In cases where 2 matches were not achieved, weights were applied.",
@@ -569,7 +569,26 @@ Below are the results of the total cost of care study across the entire populati
 ``` {r net-spend, fig.width = 9, fig.height = 5}
 
 # Add net
-df_matched <- df_matched %>%
+df_matched <- df_matched_orig %>%
+  
+  # Convert paid to allowed
+  mutate(across(c(med_pmpm, 
+                  med_pmpm_trunc, 
+                  med_pmpm_trunc_therapy_mh, 
+                  med_pmpm_trunc_ov_mh, 
+                  med_pmpm_trunc_er_mh, 
+                  med_pmpm_trunc_ip_mh,
+                  med_pmpm_trunc_hosp_op_mh,
+                  med_pmpm_trunc_other_mh,
+                  med_pmpm_trunc_therapy_nonmh,
+                  med_pmpm_trunc_ov_nonmh,
+                  med_pmpm_trunc_er_nonmh, 
+                  med_pmpm_trunc_ip_nonmh, 
+                  med_pmpm_trunc_hosp_op_nonmh,
+                  med_pmpm_trunc_other_nonmh),
+                ~ifelse(customer_name == "Hearst", .x/.8, .x)
+  )) %>%
+  #Add net
   mutate(
     med_pmpm_net = med_pmpm + effective_session_fee * spring_tx_count_month,
     med_pmpm_trunc_net = med_pmpm_trunc + effective_session_fee * spring_tx_count_month,
@@ -614,20 +633,13 @@ df_matched <- df_matched %>%
     DocuSign = ifelse(customer_name == "DocuSign", 1, 0)
   )
 
-df_analyze_all <- df_analyze_all %>%
-  mutate(
-    Hearst = ifelse(customer_name == "Hearst", 1, 0),
-    Pepsi = ifelse(customer_name == "Pepsi", 1, 0),
-    Tegna = ifelse(customer_name == "Tegna", 1, 0),
-    Wellstar = ifelse(customer_name == "Wellstar", 1, 0),
-    DocuSign = ifelse(customer_name == "DocuSign", 1, 0)
-  )
 
-
-## Gross
-m1_net_no_match <- lmer(med_pmpm_trunc_net ~ 1 + spring_dummy + spring_dummy*phase + Hearst + DocuSign + Tegna + Wellstar +
-             (1 | carrier_member_id),
-           data = filter(df_analyze_all, index_date >= spring_start_date))
+## Net spending
+m1_gross <- lmer(med_pmpm_trunc ~ 1 + spring_dummy + spring_dummy*phase + Hearst + DocuSign + Tegna + Wellstar +
+             (1 | carrier_member_id) +
+             (1 | subclass_nn),
+           weights = weights_nn,
+           data = df_matched)
 
 m1_net <- lmer(med_pmpm_trunc_net ~ 1 + spring_dummy + spring_dummy*phase + Hearst + DocuSign + Tegna + Wellstar +
              (1 | carrier_member_id) +
@@ -648,11 +660,11 @@ m1_nonmh <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
            data = df_matched)
 
 # Sensitivity
-tab_model(m1_net_no_match, m1_net, m1_mh, m1_nonmh,
+tab_model(m1_gross, m1_net, m1_mh, m1_nonmh,
           show.ci=F, 
           show.se=T, 
           pred.labels = c("Baseline PMPM", "Baseline difference (Spring - Control)", "Control pre-post change", "Hearst", "DocuSign", "Tegna", "Wellstar", "Diff-in-diff (Spring change - Control change)"),
-          dv.labels = c("Unmatched", "Matched", "Mental Health Spend", "Physical Health Spend"),
+          dv.labels = c("Total Spend - Gross", "Total Spend - Net", "Mental Health Spend - Net", "Physical Health Spend - Net"),
           title = "Spring effect on gross medical spending")
 
 
@@ -668,7 +680,7 @@ tab_model(m1_net_no_match, m1_net, m1_mh, m1_nonmh,
 #m1_boot <- foreach(B = rep(1000, 5), 
 #                       .combine = combine_lmeresamp,
 #                       .packages = c("lmeresampler", "lme4")) %dopar% {
-#                         bootstrap(m1_gross_yes_match, .f = fixef, type = "residual", B = B)
+#                         bootstrap(m1_gross, .f = fixef, type = "residual", B = B)
 #                       }
 #stopCluster(cl)
 #
@@ -1425,28 +1437,19 @@ df_roi <- df_matched %>%
   summarize(n = n_distinct(carrier_member_id)) %>%
   mutate(
     member_months_treated = n*months_treated,
-    month_roi_gross = -1*n*months_treated*summary(m1_gross_yes_match)$coefficients["spring_dummySpring:phasepost_tx", 1])
+    month_roi_gross = -1*n*months_treated*summary(m1_gross)$coefficients["spring_dummySpring:phasepost_tx", 1])
 mean_months_treated <- sum(df_roi$member_months_treated)/sum(df_roi$n)
 
 
 # First program year gross savings %
-deltamethod(m1_gross_yes_match, "0 = (6.5*b8) / ((12-6.5)*df_plot$estimate[1] + 6.5*(df_plot$estimate[2]))")
+deltamethod(m1_gross, "0 = (6.5*b8) / ((12-6.5)*df_plot_total$estimate[1] + 6.5*(df_plot_total$estimate[2]))")
 
 # First Program-year PMPY
-deltamethod(m1_gross_yes_match, "0 = -1 * b8 * mean_months_treated")
+deltamethod(m1_gross, "0 = -1 * b8 * mean_months_treated")
 
 # Program-year ROI multiple
-deltamethod(m1_gross_yes_match, "0 = (b8*(sum(df_roi$member_months_treated)))/total_invoiced")
-deltamethod(m1_gross_yes_match, "1 = ((b8 + spring_pmpm_adjustment)*(sum(df_roi$member_months_treated))/total_invoiced)")
+deltamethod(m1_net, "0 = (1 + (-1*b8 * sum(df_roi$member_months_treated)) / total_invoiced)")
 
-# Participant year gross savings %
-deltamethod(m1_gross_yes_match, "0 = b8 / (df_plot$estimate[1] + df_plot$estimate[2])")
-
-# Participant year PMPY ($)
-deltamethod(m1_gross_yes_match, "0 = 12*b8")
-
-# Participant-year ROI multiple
-deltamethod(m1_gross_yes_match, "0 = (-1*b8*12*sum(df_roi$n))/total_invoiced")
 ```
 
 
