@@ -1442,7 +1442,7 @@ mean_months_treated <- sum(df_roi$member_months_treated)/sum(df_roi$n)
 
 
 # First program year gross savings %
-deltamethod(m1_gross, "0 = (6.5*b8) / ((12-6.5)*df_plot_total$estimate[1] + 6.5*(df_plot_total$estimate[2]))")
+deltamethod(m1_gross, "0 = (6.5*b8) / ((12-6.5)*df_plot_total$estimate[1] + 6.5*(df_plot_total$estimate[2]))") # (PMPM savings / total control group spend)
 
 # First Program-year PMPY
 deltamethod(m1_gross, "0 = -1 * b8 * mean_months_treated")
