@@ -1,5 +1,5 @@
 ---
-title: "ROI study 2023"
+title: "ROI study 2024 - updated with new employers"
 output:
   html_document:
     toc: yes
@@ -60,7 +60,7 @@ library(gt)
 ``` {r load-data}
 
 # Customers included in the study
-customer_name <- c("Wellstar", "Pepsi", "Hearst", "Docusign", "Tegna")
+customer_name <- c("Wellstar", "Pepsi", "Hearst", "Docusign", "Tegna", "Western Governors University", "IDEXX")
 
 # Make some lists to fill up
 data_funnel <- list()
@@ -70,10 +70,10 @@ df_appts <- list()
 # Get datasets that have not yet been concatenated
 for (i in 1:length(customer_name)) {
 # Load data
-data_funnel[[i]] <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/round_2_analysis/", customer_name[i], "/", customer_name[i], "_data_funnel.Rdata")) %>%
+data_funnel[[i]] <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_at_scale/", customer_name[i], "/", customer_name[i], "_data_funnel.Rdata")) %>%
   mutate(customer_name = customer_name[i]) 
-df_care_use[[i]] <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/round_2_analysis/", customer_name[i], "/", customer_name[i], "_care_use.Rdata"))
-df_appts[[i]] <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/round_2_analysis/", customer_name[i], "/", customer_name[i], "_appts_by_month.Rdata"))
+df_care_use[[i]] <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_at_scale/", customer_name[i], "/", customer_name[i], "_care_use.Rdata"))
+df_appts[[i]] <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_at_scale/", customer_name[i], "/", customer_name[i], "_appts_by_month.Rdata"))
 }
 
 # Now bind into a single df
@@ -82,8 +82,8 @@ df_care_use <- df_care_use %>% bind_rows()
 df_appts <- df_appts %>% bind_rows()
 
 # Now the dfs that have previously been concatenated
-df_analyze_all <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2023/df_analyze_all.Rdata"))
-df_matched_orig <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2023/df_matched.Rdata"))
+df_analyze_all <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2023/new employer update/df_analyze_all_new_employers.Rdata"))
+df_matched_orig <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2023/new employer update/df_matched_new_employers.Rdata"))
 
 ```
 
@@ -168,7 +168,7 @@ platform_fee <- billing_all %>%
   summarize(platform_fee = sum(amount, na.rm=T)) %>%
   pull(platform_fee)
 
-billed_to_health_plan <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/round_2_analysis/intermediate_data/", customer_name[i], "_spring_med_claims.Rdata")) %>%
+billed_to_health_plan <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_at_scale/", customer_name[i], "/", customer_name[i], "_spring_med_claims.Rdata")) %>%
   filter(month_year <= spring_end_date) %>%
   mutate(carrier_member_id = as.character(carrier_member_id)) %>%
   inner_join(study_members) %>%
@@ -178,7 +178,7 @@ billed_to_health_plan <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/
 
 
 ## Get number of eligible employees on the health plan in the date range
-elig <- readRDS(file = paste0(Sys.getenv("claims_folder_path"), "/data/round_2_analysis/intermediate_data/", customer_name[i], "_carrier_elig.Rdata")) %>%
+elig <- readRDS(file = paste0(Sys.getenv("claims_folder_path"), "/data/roi_at_scale/", customer_name[i], "/", customer_name[i], "_carrier_elig.Rdata")) %>%
   filter(month_year >= spring_start_date) %>%
   filter(month_year <= spring_end_date) %>%
   filter(employee_flag == "yes") 
@@ -586,7 +586,7 @@ df_matched <- df_matched_orig %>%
                   med_pmpm_trunc_ip_nonmh, 
                   med_pmpm_trunc_hosp_op_nonmh,
                   med_pmpm_trunc_other_nonmh),
-                ~ifelse(customer_name == "Hearst", .x/.8, .x)
+                ~ifelse(customer_name == "Hearst" | customer_name == "Western Governors University", .x/.8, .x)
   )) %>%
   #Add net
   mutate(
@@ -615,45 +615,36 @@ df_matched <- df_matched %>%
       med_pmpm_trunc_other_nonmh
   )
 
-# Let's recode customer so the intercept reflects the average across participants
-cust_recode <- df_matched %>%
-  group_by(customer_name) %>%
-  summarize(cust_row_count = n()) %>%
-  ungroup() %>%
-  mutate(cust_prop = cust_row_count/sum(cust_row_count)) %>%
-  select(customer_name, cust_prop) %>%
-  pivot_wider(names_from = customer_name, values_from = cust_prop) 
-
-df_matched <- df_matched %>%
-  mutate(
-    Hearst = ifelse(customer_name == "Hearst", 1, 0),
-    Pepsi = ifelse(customer_name == "Pepsi", 1, 0),
-    Tegna = ifelse(customer_name == "Tegna", 1, 0),
-    Wellstar = ifelse(customer_name == "Wellstar", 1, 0),
-    DocuSign = ifelse(customer_name == "DocuSign", 1, 0)
-  )
+## Let's recode customer so the intercept reflects the average across participants
+#cust_recode <- df_matched %>%
+#  group_by(customer_name) %>%
+#  summarize(cust_row_count = n()) %>%
+#  ungroup() %>%
+#  mutate(cust_prop = cust_row_count/sum(cust_row_count)) %>%
+#  select(customer_name, cust_prop) %>%
+#  pivot_wider(names_from = customer_name, values_from = cust_prop) 
 
 
 ## Net spending
-m1_gross <- lmer(med_pmpm_trunc ~ 1 + spring_dummy + spring_dummy*phase + Hearst + DocuSign + Tegna + Wellstar +
+m1_gross <- lmer(med_pmpm_trunc ~ 1 + spring_dummy + spring_dummy*phase + 
              (1 | carrier_member_id) +
              (1 | subclass_nn),
            weights = weights_nn,
            data = df_matched)
 
-m1_net <- lmer(med_pmpm_trunc_net ~ 1 + spring_dummy + spring_dummy*phase + Hearst + DocuSign + Tegna + Wellstar +
+m1_net <- lmer(med_pmpm_trunc_net ~ 1 + spring_dummy + spring_dummy*phase + 
              (1 | carrier_member_id) +
              (1 | subclass_nn),
            weights = weights_nn,
            data = df_matched)
 
-m1_mh <- lmer(med_pmpm_trunc_mh_net ~ 1 + spring_dummy + spring_dummy*phase + Hearst + DocuSign + Tegna + Wellstar +
+m1_mh <- lmer(med_pmpm_trunc_mh_net ~ 1 + spring_dummy + spring_dummy*phase + 
              (1 | carrier_member_id) +
              (1 | subclass_nn),
            weights = weights_nn,
            data = df_matched)
 
-m1_nonmh <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + Hearst + DocuSign + Tegna + Wellstar +
+m1_nonmh <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
              (1 | carrier_member_id) +
              (1 | subclass_nn),
            weights = weights_nn,
@@ -663,7 +654,7 @@ m1_nonmh <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
 tab_model(m1_gross, m1_net, m1_mh, m1_nonmh,
           show.ci=F, 
           show.se=T, 
-          pred.labels = c("Baseline PMPM", "Baseline difference (Spring - Control)", "Control pre-post change", "Hearst", "DocuSign", "Tegna", "Wellstar", "Diff-in-diff (Spring change - Control change)"),
+          pred.labels = c("Baseline PMPM", "Baseline difference (Spring - Control)", "Control pre-post change", "Diff-in-diff (Spring change - Control change)"),
           dv.labels = c("Total Spend - Gross", "Total Spend - Net", "Mental Health Spend - Net", "Physical Health Spend - Net"),
           title = "Spring effect on gross medical spending")
 
@@ -703,7 +694,6 @@ tab_model(m1_gross, m1_net, m1_mh, m1_nonmh,
 df_plot <- df_matched %>%
   ungroup() %>%
   distinct(spring_dummy, phase) %>%
-  cbind(cust_recode) %>%
   mutate(
     phase_label = case_when(
       phase == "pre_tx" ~ "Before MH diagnosis",
@@ -786,7 +776,7 @@ m1_rx_truncate2.5k <- lmer(rx_pmpm_trunc2.5k ~ 1 + spring_dummy + spring_dummy*p
            data = df_matched)
 
 tab_model(m1_rx_yes_match, m1_rx_truncate10k, m1_rx_truncate5k, m1_rx_truncate2.5k, show.ci=F, show.se=T, 
-          pred.labels = c("Baseline PMPM", "Baseline difference (Spring - Control)", "Control pre-post change", "Hearst", "DocuSign", "Tegna", "Wellstar", "Diff-in-diff (Spring change - Control change)"),
+          pred.labels = c("Baseline PMPM", "Baseline difference (Spring - Control)", "Control pre-post change", "Diff-in-diff (Spring change - Control change)"),
           dv.labels = c("Matched - Standard truncation", "Any baseline pharm spend", "Truncate 10k", "Truncate 5k", "Truncate 2.5k"),
           title = "Spring effect on gross pharmacy spending")
 
@@ -919,13 +909,13 @@ ggplot(df_plot_hcc, aes(x=Estimate, xmin=lb, xmax=ub, y=hcc)) +
 ## Service categories
 ``` {r cost-categories}
 # Mental health vs Physical health
-m1_mh <- lmer(med_pmpm_trunc_mh ~ 1 + spring_dummy + spring_dummy*phase + Hearst + DocuSign + Tegna + Wellstar +
+m1_mh <- lmer(med_pmpm_trunc_mh_net ~ 1 + spring_dummy + spring_dummy*phase + 
                 (1 | carrier_member_id) +
                 (1 | subclass_nn),
               weights = weights_nn,
               data = df_matched)
 
-m1_nonmh <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + Hearst + DocuSign + Tegna + Wellstar +
+m1_nonmh <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
                    (1 | carrier_member_id) +
                    (1 | subclass_nn),
                  weights = weights_nn,
@@ -934,35 +924,30 @@ m1_nonmh <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
 # By category
 
 cc1 <- lmer(med_pmpm_trunc_ov_mh ~ 1 + spring_dummy + spring_dummy*phase +
-              Hearst + DocuSign + Tegna + Wellstar + 
               (1 | carrier_member_id) +
               (1 | subclass_nn),
             weights = weights_nn,
             data = df_matched)
 
 cc2 <- lmer(med_pmpm_trunc_er_mh ~ 1 + spring_dummy + spring_dummy*phase +
-              Hearst + DocuSign + Tegna + Wellstar + 
               (1 | carrier_member_id) +
               (1 | subclass_nn),
             weights = weights_nn,
             data = df_matched)
 
 cc3 <- lmer(med_pmpm_trunc_hosp_op_mh ~ 1 + spring_dummy + spring_dummy*phase +
-              Hearst + DocuSign + Tegna + Wellstar + 
               (1 | carrier_member_id) +
               (1 | subclass_nn),
             weights = weights_nn,
             data = df_matched)
 
 cc4 <- lmer(med_pmpm_trunc_ip_mh ~ 1 + spring_dummy + spring_dummy*phase +
-              Hearst + DocuSign + Tegna + Wellstar + 
               (1 | carrier_member_id) +
               (1 | subclass_nn),
             weights = weights_nn,
             data = df_matched)
 
 cc5 <- lmer(med_pmpm_trunc_therapy_mh_net ~ 1 + spring_dummy + spring_dummy*phase +
-              Hearst + DocuSign + Tegna + Wellstar + 
               (1 | carrier_member_id) +
               (1 | subclass_nn),
             weights = weights_nn,
@@ -970,35 +955,30 @@ cc5 <- lmer(med_pmpm_trunc_therapy_mh_net ~ 1 + spring_dummy + spring_dummy*phas
 
 ## Non-MH
 cc6 <- lmer(med_pmpm_trunc_ov_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
-              Hearst + DocuSign + Tegna + Wellstar + 
               (1 | carrier_member_id) +
               (1 | subclass_nn),
             weights = weights_nn,
             data = df_matched)
 
 cc7 <- lmer(med_pmpm_trunc_er_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
-              Hearst + DocuSign + Tegna + Wellstar + 
               (1 | carrier_member_id) +
               (1 | subclass_nn),
             weights = weights_nn,
             data = df_matched)
 
 cc8 <- lmer(med_pmpm_trunc_hosp_op_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
-              Hearst + DocuSign + Tegna + Wellstar + 
               (1 | carrier_member_id) +
               (1 | subclass_nn),
             weights = weights_nn,
             data = df_matched)
 
 cc9 <- lmer(med_pmpm_trunc_ip_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
-              Hearst + DocuSign + Tegna + Wellstar + 
               (1 | carrier_member_id) +
               (1 | subclass_nn),
             weights = weights_nn,
             data = df_matched)
 
 cc10 <- lmer(med_pmpm_trunc_therapy_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
-               Hearst + DocuSign + Tegna + Wellstar + 
                (1 | carrier_member_id) +
                (1 | subclass_nn),
              weights = weights_nn,
@@ -1023,8 +1003,6 @@ for (i in 1:10) {
 df_cc_plot <- df_cc_list %>%
   bind_rows() %>%
   filter(phase == "post_tx") %>%
-  mutate(across(c(estimate, conf.low, conf.high), 
-                ~ ifelse(spring_dummy == "Spring" & spend_category == "Behavioral Health" & mh == "Mental health", .x + spring_cost_adjustment, .x))) %>% 
   select(spring_dummy, spend_category, mh, estimate, conf.low, conf.high) %>%
   mutate(spring_dummy = factor(spring_dummy, levels = c("Health Plan", "Spring"))) %>%
   mutate(spend_category = factor(spend_category, levels = c("Office visits", "Emergency room", "Hospital outpatient", "Hospital inpatient", "Behavioral Health")))
@@ -1222,7 +1200,7 @@ ggplot(df_sessions, aes(x=sessions, y=estimate, group=group, color=group)) +
   geom_hline(yintercept = 0, linetype = "dashed") +
   theme_modern()
 
-m_sessions1 <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + Hearst + Pepsi + Tegna + Wellstar +
+m_sessions1 <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
                      as.factor(months_post) + as.factor(months_post)*spring_dummy + 
                       any_therapy + session_count + session_count*spring_dummy + 
              (1 | carrier_member_id) +
@@ -1230,7 +1208,7 @@ m_sessions1 <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase
            weights = weights_nn,
            data = df_matched)
 
-m_sessions2 <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + Hearst + Pepsi + Tegna + Wellstar +
+m_sessions2 <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
                      as.factor(months_post) + as.factor(months_post)*spring_dummy + 
                       therapy_sessions_factor + therapy_sessions_factor*spring_dummy + 
              (1 | carrier_member_id) +
@@ -1238,7 +1216,7 @@ m_sessions2 <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase
            weights = weights_nn,
            data = df_matched)
 
-m_sessions3 <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + Hearst + Pepsi + Tegna + Wellstar +
+m_sessions3 <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
                      as.factor(months_post) + as.factor(months_post)*spring_dummy + 
                       therapy_sessions_factor + 
              (1 | carrier_member_id) +
@@ -1247,7 +1225,7 @@ m_sessions3 <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase
            data = df_matched)
 
 tab_model(m_sessions1, m_sessions2,
-          drop = c("Hearst", "Pepsi", "Tegna", "Wellstar", "months_post", "(Intercept)", "phase"), 
+          drop = c("months_post", "(Intercept)", "phase"), 
           show.ci=F,
           show.icc = F,
           show.re.var = F,
@@ -1285,7 +1263,7 @@ df_matched %>%
   group_by(spring_dummy, months) %>%
   summarize(
     pmpm = mean(med_pmpm_trunc_net, na.rm=T),
-    sd = sd(med_pmpm_trunc, na.rm=T),
+    sd = sd(med_pmpm_trunc_net, na.rm=T),
     n = n_distinct(carrier_member_id),
     se = sd/sqrt(n)
     ) %>%
@@ -1442,13 +1420,13 @@ mean_months_treated <- sum(df_roi$member_months_treated)/sum(df_roi$n)
 
 
 # First program year gross savings %
-deltamethod(m1_gross, "0 = (6.5*b8) / ((12-6.5)*df_plot_total$estimate[1] + 6.5*(df_plot_total$estimate[2]))") # (PMPM savings / total control group spend)
+deltamethod(m1_gross, "0 = (6.5*b4) / ((12-6.5)*df_plot_total$estimate[1] + 6.5*(df_plot_total$estimate[2]))") # (PMPM savings / total control group spend)
 
 # First Program-year PMPY
-deltamethod(m1_gross, "0 = -1 * b8 * mean_months_treated")
+deltamethod(m1_gross, "0 = -1 * b4 * mean_months_treated")
 
 # Program-year ROI multiple
-deltamethod(m1_net, "0 = (1 + (-1*b8 * sum(df_roi$member_months_treated)) / total_invoiced)")
+deltamethod(m1_net, "0 = (1 + (-1*b4 * sum(df_roi$member_months_treated)) / total_invoiced)")
 
 ```
 
@@ -1588,135 +1566,6 @@ tab_model(m1_bh_overall, m1_bh_mh_spend, m1_bh_nonmh_spend,
 ```
 
 
-## Outcomes by mental health conditions
-``` {r -outcomes-by-disorder}
-
-# Models
-sud_overall <- lmer(med_pmpm_trunc ~ 1 + spring_dummy + spring_dummy*phase + 
-                             (1 | carrier_member_id) +
-                             (1 | subclass_nn),
-                           #weights = weights_nn,
-                           data = filter(df_matched, dx_imputed == "sud"))
-
-
-mh_mood <- lmer(med_pmpm_trunc_mh ~ 1 + spring_dummy + spring_dummy*phase +
-                       (1 | carrier_member_id) +
-                       (1 | subclass_nn),
-                     weights = weights_nn,
-                     data = filter(df_matched, dx_imputed == "mood"))
-
-mh_anxiety <- lmer(med_pmpm_trunc_mh ~ 1 + spring_dummy + spring_dummy*phase + 
-                        (1 | carrier_member_id) +
-                        (1 | subclass_nn),
-                      weights = weights_nn,
-                      data = filter(df_matched, dx_imputed == "anxiety"))
-
-mh_sud <- lmer(med_pmpm_trunc_mh ~ 1 + spring_dummy + spring_dummy*phase + 
-                             (1 | carrier_member_id) +
-                             (1 | subclass_nn),
-                           #weights = weights_nn,
-                           data = filter(df_matched, dx_imputed == "sud"))
-
-nonmh_mood <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
-                       (1 | carrier_member_id) +
-                       (1 | subclass_nn),
-                     weights = weights_nn,
-                     data = filter(df_matched, dx_imputed == "mood"))
-
-nonmh_anxiety <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
-                        (1 | carrier_member_id) +
-                        (1 | subclass_nn),
-                      weights = weights_nn,
-                      data = filter(df_matched, dx_imputed == "anxiety"))
-
-nonmh_sud <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
-                             (1 | carrier_member_id) +
-                             (1 | subclass_nn),
-                           #weights = weights_nn,
-                           data = filter(df_matched, dx_imputed == "sud"))
-
-dx_list <- list(mh_mood, mh_anxiety, mh_sud, nonmh_mood, nonmh_anxiety, nonmh_sud)
-
-df_dx_results <- data.frame(
-  Term = NA, 
-  Estimate = NA, 
-  se = NA, 
-  z = NA, 
-  p = NA, 
-  lb = NA, 
-  ub = NA)
-
-for (i in 1:length(dx_list)) {
-  df_dx_results[i,] <- hypotheses(dx_list[[i]], hypothesis = "b4 = 0")
-  df_dx_results[7,] <- hypotheses(m_all_mh, hypothesis = "b8 = 0") # add pop average MH
-  df_dx_results[8,] <- hypotheses(m_all_nonmh, hypothesis = "b8 = 0") # add pop average non-MH
-}
-
-# Add cc names
-df_dx_results <- df_dx_results %>%
-  mutate(
-    mh_diagnosis = c(
-      rep(c("Mood", "Anxiety", "SUD"), 2),
-      rep("Population average", 2)
-      ),
-    var_name = c(
-      rep(c("mood", "anxiety", "sud"), 2),
-      rep("Population average", 2)
-    ),
-    spend_type = c(rep("Mental healthcare savings", 3), rep("All other healthcare savings", 3), "Mental healthcare savings", "All other healthcare savings")
-  )
-
-```
-
-
-### Plot by MH condition
-``` {r plot-dx}
-
-## Make it nice
-cc_colors <- c("#34a853", "grey")
-df_plot_dx <- df_dx_results %>%
-  mutate(
-    Estimate = -1*Estimate,
-    lb = -1*lb,
-    ub = -1*ub
-  ) %>%
-  mutate(
-    mh_diagnosis = fct_reorder(as.factor(mh_diagnosis), Estimate),
-    spend_type = fct_relevel(spend_type,"Mental healthcare savings", "All other healthcare savings")
-    )
-
-## Let's plot with CIs so we can understand it
-ggplot(df_plot_dx, aes(x=Estimate, xmin=lb, xmax=ub, y=mh_diagnosis, color = spend_type)) +
-  geom_pointrange(position = position_dodge(width=0.5)) +
-  scale_color_manual(values = cc_colors) +
-  geom_vline(xintercept = 0, linetype = "dashed") +
-  theme_modern() +
-  theme(legend.position = "bottom")
-
-
-## For barplot, we want overall value laels
-df_labels <- df_plot_dx %>%
-  group_by(mh_diagnosis) %>%
-  summarize(total = sum(Estimate)) 
-
-
-# Bar plot
-ggplot(df_plot_dx, aes(x=Estimate, y=mh_diagnosis, fill = spend_type)) +
-  geom_bar(stat = "identity", width = 0.6, position=position_stack(reverse=T)) +
-  scale_fill_manual(values = cc_colors) +
-  geom_text(aes(x=total, y=mh_diagnosis, label = round(total, 0), fill = NULL, hjust = ifelse(total < 0, 1.1, -0.4)), colour = "#8e8e8e", size = 3, data = df_labels) +
-  expand_limits(x=c(0, 1.1*max(df_labels$total))) +
-  theme_modern() +
-  theme(legend.position = "bottom") +
-  labs(
-    x = "PMPM savings",
-    y = "",
-    fill = " "
-  )
-
-
-```
-
 ## Drop those with month 1 inpatient spend
 ``` {r drop-inpatient}
 
@@ -1727,7 +1576,7 @@ df_matched <- df_matched %>%
     ip_months1_to_3 = sum(med_pmpm_trunc_ip_nonmh[months==1 | months==2 | months==3], na.rm=T)
     ) 
 
-m1_drop_month1_ip <- lmer(med_pmpm_trunc_net ~ 1 + spring_dummy + spring_dummy*phase + Hearst + DocuSign + Tegna + Wellstar +
+m1_drop_month1_ip <- lmer(med_pmpm_trunc_net ~ 1 + spring_dummy + spring_dummy*phase + 
              (1 | carrier_member_id) +
              (1 | subclass_nn),
            weights = weights_nn,
