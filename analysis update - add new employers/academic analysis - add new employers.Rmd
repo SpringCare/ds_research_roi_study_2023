@@ -88,6 +88,14 @@ df_matched_orig <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_st
 ```
 
 
+## HEY MATT - REMEMBER TO CHECK WHETHER WE ARE PULLING BUGGY HIGH COST CONDITIONS DATA
+``` {r check-hcc-bugs}
+df_matched_orig %>%
+  filter(months_post == 1) %>%
+  group_by(customer_name, cc_any) %>%
+  summarize(n = n())
+```
+
 ## Billing data
 ``` {r billing-data}
 

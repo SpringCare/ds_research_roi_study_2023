@@ -9,7 +9,7 @@ customer_name <- c("Wellstar", "Pepsi", "Hearst", "Docusign", "Tegna", "Western 
 # Load data
 df_list <- list()
 for (i in 1:length(customer_name)) {
-df_list[[i]] <- readRDS(file = paste0(Sys.getenv("claims_folder_path"), "data/round_2_analysis/", customer_name[i], "/", customer_name[i], "_analyze_all.Rdata"))
+df_list[[i]] <- readRDS(file = paste0(Sys.getenv("claims_folder_path"), "data/roi_at_scale/", customer_name[i], "/", customer_name[i], "_analyze_all.Rdata"))
 }
 
 df_analyze_all <- df_list %>%
@@ -91,7 +91,8 @@ df_risk <- df_risk %>%
 ## Matchit only uses a binary tx variable, 
 df_post <- df_risk %>%
   filter(index_date >= spring_start_date) %>%
-  filter(!is.na(risk_score_log))
+  filter(!is.na(risk_score_log)) %>%
+  filter(!is.na(dx_imputed)) # fixes some IDEXX issues
 
 
 ## Nearest neighbor matching
@@ -116,8 +117,8 @@ df_matched <- match.data(match.final, drop.unmatched = TRUE) %>%
   filter(weights_nn > 0)
 
 #---------------
-saveRDS(df_analyze_all, paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2023/df_analyze_all.Rdata"))
-saveRDS(df_matched, paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2023/df_matched.Rdata"))
+saveRDS(df_analyze_all, paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2023/new employer update/df_analyze_all_new_employers.Rdata"))
+saveRDS(df_matched, paste0(Sys.getenv("claims_folder_path"), "data/roi_study_2023/new employer update/df_matched_new_employers.Rdata"))
 
 
          
