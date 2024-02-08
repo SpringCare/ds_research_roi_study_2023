@@ -320,8 +320,10 @@ hypotheses(m_overall_util, "(
            (exp(b2) / (1 + exp(b2))) +
            (exp(b3) / (1 + exp(b3))) +
            (exp(b4) / (1 + exp(b4))) +
-           (exp(b5) / (1 + exp(b5)))
-           ) / 5 = 0
+           (exp(b5) / (1 + exp(b5))) +
+           (exp(b6) / (1 + exp(b6))) +
+           (exp(b7) / (1 + exp(b7))) 
+           ) / 7 = 0
            ")
 
 predictions(m_overall_util, newdata = df_phase_summary %>% distinct(customer_name, phase), type = "probs") %>%
@@ -670,30 +672,27 @@ tab_model(m1_gross, m1_net, m1_mh, m1_nonmh,
 # raw with bootstrapped SEs. 
 # Use residuals because we trust the shape of the regression (all binary) but not the noise
 
-#set.seed(8102018)
-#numCores <- 5
-#cl <- makeCluster(numCores, type = "PSOCK") # make a socket cluster
-#doParallel::registerDoParallel(cl)          # how the CPU knows to run in parallel
-#
-## 5000 total resamples
-#m1_boot <- foreach(B = rep(1000, 5), 
-#                       .combine = combine_lmeresamp,
-#                       .packages = c("lmeresampler", "lme4")) %dopar% {
-#                         bootstrap(m1_gross, .f = fixef, type = "residual", B = B)
-#                       }
-#stopCluster(cl)
-#
-#
-#m1_boot$stats %>%
-#  data.frame() %>%
-#  mutate(
-#    lb_95 = observed - 1.96*se,
-#    ub_95 = observed + 1.96*se
-#  ) %>%
-#  mutate(across(observed:ub_95, ~round(.x, 2))) %>%
-#  select(-c(rep.mean, bias)) %>%
-#  kableone() %>%
-#  kable_classic(full_width = FALSE, html_font = "Cambria")
+set.seed(8102018)
+nboot <- 5000
+ncores <- 5
+
+cl <- makeCluster(numCores, type = "PSOCK") # make a socket cluster
+doParallel::registerDoParallel(cl)          # how the CPU knows to run in parallel
+
+# Run bootstrap
+m1_boot <- foreach(B = rep(nboot/ncores, ncores), 
+                       .combine = combine_lmeresamp,
+                       .packages = c("lmeresampler", "lme4")) %dopar% {
+                         bootstrap(m1_gross, .f = fixef, type = "residual", B = B)
+                       }
+stopCluster(cl)
+
+# Get CIs
+confint(m1_boot, type = "perc") %>%
+  select(term, estimate, lower, upper) %>%
+  mutate(across(estimate:upper, ~round(.x, 2))) %>%
+  kableone() %>%
+  kable_classic(full_width = FALSE, html_font = "Cambria")
 ```
 
 
@@ -875,8 +874,8 @@ df_cc_results <- data.frame(
   ub = NA)
 
 for (i in 1:length(m_list)) {
-  df_cc_results[i,] <- hypotheses(m_list[[i]], hypothesis = "b9 + b12 = 0")
-  df_cc_results[length(m_list) + 1,] <- hypotheses(m_no_hcc, hypothesis = "b9 = 0")
+  df_cc_results[i,] <- hypotheses(m_list[[i]], hypothesis = "b11 + b14 = 0")
+  df_cc_results[length(m_list) + 1,] <- hypotheses(m_no_hcc, hypothesis = "b11 = 0")
 }
 
 # Add cc names
