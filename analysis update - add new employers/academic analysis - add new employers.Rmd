@@ -1,5 +1,5 @@
 ---
-title: "ROI study 2024 - updated with new employers"
+title: "ROI study 2024 updated with new employers"
 output:
   html_document:
     toc: yes
@@ -677,7 +677,7 @@ set.seed(8102018)
 nboot <- 5000
 ncores <- 5
 
-cl <- makeCluster(numCores, type = "PSOCK") # make a socket cluster
+cl <- makeCluster(ncores, type = "PSOCK") # make a socket cluster
 doParallel::registerDoParallel(cl)          # how the CPU knows to run in parallel
 
 # Run bootstrap
