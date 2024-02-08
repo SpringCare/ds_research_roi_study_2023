@@ -88,8 +88,7 @@ df_matched_orig <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_st
 ```
 
 
-## Confirm that high cost condition data are not old and buggy
-They're not. We expect more no than yes responses in each condition, and that's what we see.
+## HEY MATT - REMEMBER TO CHECK WHETHER WE ARE PULLING BUGGY HIGH COST CONDITIONS DATA
 ``` {r check-hcc-bugs}
 df_matched_orig %>%
   filter(months_post == 1) %>%
@@ -1462,7 +1461,7 @@ table1( ~ age_at_index + member_sex + dx_imputed + risk_score_dx + months_diagno
 ## Participant-year trajectories
 ``` {r participant-year-trajectories}
 
-m_1yr_participant <- lmer(med_pmpm_trunc_net ~ 1 + spring_dummy + as.factor(months_post) +
+m_1yr_participant <- lmer(med_pmpm_trunc ~ 1 + spring_dummy + as.factor(months_post) +
                           spring_dummy*as.factor(months_post) + 
                              (1 | carrier_member_id) +
                              (1 | subclass_nn),
@@ -1500,52 +1499,6 @@ ggplot(df_plot_participant_year, aes(x=months, y=estimate, ymin=conf.low, ymax=c
     x = "",
     y = "PMPM allowed amount",
     color = ""
-  )
-
-# Plot cumulative ROI
-generate_b_string <- function(b) {
-  # Generate the sequence of elements
-  elements <- sapply(1:b, function(i) paste("b", 15+i-1, sep=""))
-  
-  # Combine elements into a single string with " + " as separator
-  result_string <- paste(elements, collapse = " + ")
-  
-  return(result_string)
-}
-net_fun <- function(x) {hypotheses(m_1yr_participant, hypothesis = paste0(generate_b_string(x), "= 0"))}
-
-df_plot_cumulative <- data.frame(months_post = seq(1, 12, 1)) %>%
-  rowwise() %>%
-  mutate(
-    net_cumulative = -1*net_fun(months_post)[[2]],
-    lb = -1*net_fun(months_post)[[6]],
-    ub = -1*net_fun(months_post)[[7]]
-) %>%
-  ungroup() %>%
-  data.frame() 
-
-# people like bar plots
-ggplot(df_plot_cumulative, aes(x=months_post, y=net_cumulative, ymin=lb, ymax=ub)) +
-  geom_bar(stat = "identity", fill = "#34a853") +
-  geom_pointrange(color = "grey") +
-  theme_modern() +
-  scale_x_continuous(breaks = seq(1,12,1)) +
-  labs(
-    title = "Cumulative ROI from first month of treatment",
-    x = "Months from first treatment",
-    y = "$, cumulative"
-  )
-
-# ... but line plots are better for understanding the data
-ggplot(df_plot_cumulative, aes(x=months_post, y=net_cumulative, ymin=lb, ymax=ub)) +
-  geom_smooth(se=FALSE) +
-  geom_pointrange(color = "grey") +
-  theme_modern() +
-  scale_x_continuous(breaks = seq(1,12,1)) +
-  labs(
-    title = "Cumulative ROI from first month of treatment",
-    x = "Months from first treatment",
-    y = "$, cumulative"
   )
 
 ```
