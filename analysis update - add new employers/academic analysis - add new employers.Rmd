@@ -36,9 +36,11 @@ library(janitor)
 library(rio)
 library(lubridate)
 library(table1)
+library(survey)
 library(lme4)
 library(lmerTest)
 library(lmeresampler)
+library(splines)
 library(nnet)
 library(foreach)
 library(doParallel)
@@ -70,10 +72,10 @@ df_appts <- list()
 # Get datasets that have not yet been concatenated
 for (i in 1:length(customer_name)) {
 # Load data
-data_funnel[[i]] <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_at_scale/", customer_name[i], "/", customer_name[i], "_data_funnel.Rdata")) %>%
+data_funnel[[i]] <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/round_2_analysis/", customer_name[i], "/", customer_name[i], "_data_funnel.Rdata")) %>%
   mutate(customer_name = customer_name[i]) 
-df_care_use[[i]] <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_at_scale/", customer_name[i], "/", customer_name[i], "_care_use.Rdata"))
-df_appts[[i]] <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_at_scale/", customer_name[i], "/", customer_name[i], "_appts_by_month.Rdata"))
+df_care_use[[i]] <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/round_2_analysis/", customer_name[i], "/", customer_name[i], "_care_use.Rdata"))
+df_appts[[i]] <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/round_2_analysis/", customer_name[i], "/", customer_name[i], "_appts_by_month.Rdata"))
 }
 
 # Now bind into a single df
@@ -87,15 +89,6 @@ df_matched_orig <- readRDS(paste0(Sys.getenv("claims_folder_path"), "data/roi_st
 
 ```
 
-
-## Confirm that high cost condition data are not old and buggy
-They're not. We expect more no than yes responses in each condition, and that's what we see.
-``` {r check-hcc-bugs}
-df_matched_orig %>%
-  filter(months_post == 1) %>%
-  group_by(customer_name, cc_any) %>%
-  summarize(n = n())
-```
 
 ## Billing data
 ``` {r billing-data}
@@ -250,102 +243,11 @@ Spring promises to drive value by getting more people into care who otherwise wo
   2. Any utilization by month  
   3. Number of sessions per month 
   
-  
-# Annual utilization
-
-``` {r cust-avg-utilization, fig.width = 10, fig.height = 5}
-
-df_phase_summary <- df_care_use %>%
-  filter(month_year >= baseline_start_date) %>%
-  filter(month_year <= spring_end_date) %>%
-  mutate(phase = ifelse(month_year < spring_start_date, "Pre-launch", "Post-launch")) %>%
-  mutate(phase = factor(phase, levels = c("Pre-launch", "Post-launch"))) %>%
-  group_by(customer_name, carrier_member_id, phase) %>%
-  summarize(
-    carrier_tx_count_month = sum(carrier_tx_count_month),
-    spring_tx_count_month = sum(spring_tx_count_month),
-    carrier_therapist_count_month = sum(carrier_therapist_count_month),
-    spring_therapist_count_month = sum(spring_therapist_count_month)
-  ) %>%
-  ungroup() %>%
-  mutate(
-    mh_appt_group = factor(case_when(
-      carrier_tx_count_month > 0 & spring_tx_count_month > 0 ~ "Both Spring and Health Plan",
-      carrier_tx_count_month > 0 & spring_tx_count_month == 0 ~ "Health Plan only",
-      carrier_tx_count_month == 0 & spring_tx_count_month > 0 ~ "Spring only",
-      carrier_tx_count_month == 0 & spring_tx_count_month == 0 ~ "No appointments"
-    ),
-    levels = c("Spring only", "Both Spring and Health Plan", "Health Plan only", "No appointments")
-    ))
-
-care_use_avg <- df_phase_summary %>%
-  group_by(customer_name, phase, mh_appt_group) %>%
-  summarize(group_n = n()) %>%
-  group_by(customer_name, phase) %>%
-  mutate(proportion = group_n/sum(group_n)) %>%
-  filter(mh_appt_group != "No appointments") %>%
-  group_by(phase, mh_appt_group) %>%
-  summarize(proportion = mean(proportion)) %>%
-  mutate(proportion = round(100*proportion, 1))
-  
-
-# Plot
-color_scheme <- c("#37837c","#A9DbD6", '#c7c7c7') # set colors
-
-## plot
-ggplot(care_use_avg, aes(x = phase, y=proportion, group = mh_appt_group, fill = mh_appt_group)) +
-  geom_bar(position="stack", stat="identity", width = 0.5) +
-  scale_fill_manual(values = color_scheme, name = "Provider") +
-  geom_text(aes(label=proportion), position = position_stack(vjust = 0.5), colour = "black") +
-  theme_modern() +
-  labs(
-    title = "Members using any outpatient behavioral health care in the year",
-    x = "",
-    y = "Percent",
-    group = "",
-    fill = ""
-  )
-
-# Model 
-
-## Overall
-df_phase_summary <- df_phase_summary %>%
-  mutate(any_utilization = ifelse(mh_appt_group == "No appointments", "no", "yes"))
-
-m_overall_util <- multinom(any_utilization ~ -1 + customer_name:phase,
-            data = df_phase_summary) 
-
-mnom_avg <- function(x) exp(x) / (1 + exp(x))
-hypotheses(m_overall_util, "(
-           (exp(b1) / (1 + exp(b1))) +
-           (exp(b2) / (1 + exp(b2))) +
-           (exp(b3) / (1 + exp(b3))) +
-           (exp(b4) / (1 + exp(b4))) +
-           (exp(b5) / (1 + exp(b5))) +
-           (exp(b6) / (1 + exp(b6))) +
-           (exp(b7) / (1 + exp(b7))) 
-           ) / 7 = 0
-           ")
-
-predictions(m_overall_util, newdata = df_phase_summary %>% distinct(customer_name, phase), type = "probs") %>%
-  arrange(phase)
-
-
-## Model pre-phase
-m1_util <- multinom(mh_appt_group ~ customer_name,
-            data = filter(df_phase_summary, phase == "Pre-launch"))
-
-## Model post-phase
-m2_util <- multinom(mh_appt_group ~ customer_name,
-            data = filter(df_phase_summary, phase == "Post-launch"))
-
-predictions(m1_util, newdata = df_phase_summary %>% distinct(customer_name), type = "probs")
-predictions(m2_util, newdata = df_phase_summary %>% distinct(customer_name), type = "probs") 
-```
 
 
 ## Monthly utilization
-``` {r monthly-utilization}
+
+``` {r monthly-utilization, fig.width = 10, fig.height = 5}
 
 # Monthly utilization
 plot_monthly_avg <- df_care_use %>%
@@ -359,24 +261,23 @@ plot_monthly_avg <- df_care_use %>%
     phase = ifelse(month_year < spring_start_date, "Pre-launch", "Post-launch"),
     provider = "Spring"
     ) %>%
-  group_by(customer_name, mh_appt_group, months_std) %>%
-  summarize(
-    mh_appt_in_month = sum(mh_appt_in_month == "yes"),
-    group_n = n()
-    ) %>%
+  # We need weights per employer per month
   group_by(customer_name, months_std) %>%
-  mutate(n = sum(group_n)) %>%
+  mutate(employer_n = sum(!is.na(mh_appt_group))) %>%
+  mutate(employer_weight = 1 / employer_n) %>% # employer weight by month
+  group_by(mh_appt_group, months_std) %>%
+  summarize(group_weight = sum(employer_weight)) %>%
+  group_by(months_std) %>%
+  mutate(mh_appt_in_month_proportion = group_weight / sum(group_weight)) %>%
   mutate(
-    mh_appt_in_month_proportion = mh_appt_in_month/n,
     mh_appt_group = case_when(
       mh_appt_group == "Carrier only" ~ "Health Plan only",
-      mh_appt_group == "Both Spring and Carrier" ~ "Both Spring and Health Plan",
+      mh_appt_group == "Both Spring and Carrier" ~ "Both Program and Health Plan",
+      mh_appt_group == "Spring only" ~ "Program only",
       TRUE ~ mh_appt_group)
     ) %>%
-  mutate(mh_appt_group = factor(mh_appt_group, levels = c("Spring only", "Both Spring and Health Plan", "Health Plan only"))) %>%
+  mutate(mh_appt_group = factor(mh_appt_group, levels = c("Program only", "Both Program and Health Plan", "Health Plan only"))) %>%
   filter(mh_appt_group != "No appointments") %>%
-  group_by(months_std, mh_appt_group) %>%
-  summarize(mh_appt_in_month_proportion = mean(mh_appt_in_month_proportion)) %>%
   arrange(mh_appt_group, months_std)
 
 
@@ -397,23 +298,149 @@ max_avg <-max(
 )
 
 ## Plot
-ggplot(plot_monthly_avg, aes(x = months_std, y=mh_appt_in_month_proportion, group = mh_appt_group, fill = mh_appt_group)) +
+color_scheme <- c("#37837c","#A9DbD6", '#c7c7c7') # set colors
+
+p1 <- ggplot(plot_monthly_avg, aes(x = months_std, y=mh_appt_in_month_proportion, group = mh_appt_group, fill = mh_appt_group)) +
   geom_bar(position="stack", stat="identity") +
   scale_fill_manual(values = color_scheme, name = "Provider") +
   theme_modern() +
   geom_hline(yintercept = pre_mean_avg, linetype = "dashed") +
   geom_vline(xintercept = 0, color = "#48ADA3", linetype = "dashed") +
   theme(axis.text.x = element_text(angle = 70, vjust = 1, hjust=1)) +
-  annotate(geom = "text", x = 3, y = max_avg*1.4, label = "Spring launch", color = "#37837c", size = 5) +
+  annotate(geom = "text", x = 3, y = max_avg*1.4, label = "Program launch", color = "#37837c", fontface = "bold", size = 4) +
   annotate(geom = "text", x = -6.5, y = pre_mean_avg*1.2, label = paste0("Pre-launch = ", 100*pre_mean_avg, "% per month"), color = "#767676", size = 4) +
   annotate(geom = "text", x = 6.5, y = post_mean_avg*1.2, label = paste0("Post-launch = ", 100*post_mean_avg, "% per month"), color = "#37837c", size = 4) +
   labs(
-    title = "Employees with at least 1 MH appointment",
-    x = "Months from Spring launch",
+    title = "Monthly",
+    x = "Months from Program launch",
     y = "Proportion"
   )
+p1
+```
+
+
+## Annual utilization
+
+``` {r summarize-utilization-data}
+
+# Summarize to month level
+df_phase_summary <- df_care_use %>%
+  filter(month_year >= baseline_start_date) %>%
+  filter(month_year <= spring_end_date) %>%
+  mutate(phase = ifelse(month_year < spring_start_date, "Pre-launch", "Post-launch")) %>%
+  mutate(phase = factor(phase, levels = c("Pre-launch", "Post-launch"))) %>%
+  group_by(customer_name, carrier_member_id, phase) %>%
+  summarize(
+    carrier_tx_count_month = sum(carrier_tx_count_month),
+    spring_tx_count_month = sum(spring_tx_count_month),
+    carrier_therapist_count_month = sum(carrier_therapist_count_month),
+    spring_therapist_count_month = sum(spring_therapist_count_month)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    mh_appt_group = factor(case_when(
+      carrier_tx_count_month > 0 & spring_tx_count_month > 0 ~ "Both Program and Health Plan",
+      carrier_tx_count_month > 0 & spring_tx_count_month == 0 ~ "Health Plan only",
+      carrier_tx_count_month == 0 & spring_tx_count_month > 0 ~ "Program only",
+      carrier_tx_count_month == 0 & spring_tx_count_month == 0 ~ "No appointments"
+    ),
+    levels = c("Program only", "Both Program and Health Plan", "Health Plan only", "No appointments")
+    ))
+
+## Add weights
+df_phase_summary <- df_phase_summary %>%
+  mutate(any_utilization = ifelse(mh_appt_group == "No appointments", "no", "yes")) %>%
+  mutate(any_utilization = as.factor(any_utilization)) %>%
+  # make weights
+  group_by(customer_name, phase) %>%
+  mutate(employer_n = sum(!is.na(any_utilization))) %>%
+  mutate(employer_weight = 1 / employer_n) %>%
+  mutate(customer_name = as.factor(customer_name)) %>%
+  ungroup()
+```
+
+
+## Customer-average
+``` {r cust-avg-utilization, fig.width = 9, fig.height = 9}
+
+## Model
+
+## Make survey design object with members nested in customers
+d1 <- svydesign(
+  id = ~ customer_name + carrier_member_id, # members nested in customers. Order matters in this equation.
+  weights = ~employer_weight, 
+  data = df_phase_summary) 
+
+## Model
+m1 <- svyglm(any_utilization ~ phase, family = binomial, design = d1)
+
+## Point estimates
+month_estimates <- predictions(m1, newdata = df_phase_summary %>% distinct(phase), type = "response") %>%
+  arrange(phase) %>%
+  data.frame() %>%
+  mutate(
+    mh_appt_group = "Program only",
+    percent = 100 * estimate,
+    percent.low = 100 * conf.low,
+    percent.high = 100 * conf.high
+    )
+month_estimates
+## Test pre-post difference
+hypotheses(m1, hypothesis = "exp(b1 + b2) / (1 + exp(b1 + b2)) - exp(b1) / (1 + exp(b1)) = 0")
+
+
+# Plot weighted data
+care_use_avg <- df_phase_summary %>%
+  group_by(customer_name, phase) %>%
+  mutate(employer_n = sum(!is.na(mh_appt_group))) %>%
+  mutate(employer_weight = 1 / employer_n) %>% # employer weight by month
+  group_by(phase, mh_appt_group) %>%
+  summarize(group_weight = sum(employer_weight)) %>%
+  group_by(phase) %>%
+  mutate(proportion = group_weight / sum(group_weight)) %>%
+  filter(mh_appt_group != "No appointments") %>%
+  arrange(mh_appt_group, phase) %>%
+  mutate(percent = 100 * round(proportion, 3))
+  
+
+## plot
+color_scheme <- c("#37837c","#A9DbD6", '#c7c7c7') # set colors
+
+p2 <- ggplot(care_use_avg, aes(x = phase, y=percent, group = mh_appt_group, fill = mh_appt_group)) +
+  geom_bar(position="stack", stat="identity", width = 0.5) +
+  scale_fill_manual(values = color_scheme, name = "Provider") +
+  geom_text(aes(label=percent), position = position_stack(vjust = 0.5), colour = "black") +
+  geom_errorbar(data = month_estimates, aes(ymin = percent.low, ymax = percent.high, width = 0.1), color = "grey65", show.legend = F) +
+  annotate(geom = "segment", x = 1.1, xend = 1.1, y = 12.6, yend = 13) +
+  annotate(geom = "segment", x = 1.9, xend = 1.9, y = 12.6, yend = 13) +
+  annotate(geom = "segment", x = 1.1, xend = 1.9, y = 13, yend = 13) +
+  annotate(geom = "text", x = 1.4, y = 14.3, label = "difference = 3.9% [2.8% to 5.1%]\np < .001", hjust = 0.5, size=3.75) +
+  theme_modern() +
+  labs(
+    title = "Annual",
+    x = "",
+    y = "Percent",
+    group = "",
+    fill = ""
+  )
+p2
+```
+
+
+## Figure 1: Utilization
+
+``` {r plot-figure-1, fig.width = 9, fig.height = 9}
+plot_grid(
+  p1 + theme(legend.position = "none") + labs(title = ""),
+  p2 + labs(title = ""),
+  nrow=2,
+  labels = c("A) Monthly utilization", "B) Annual utilization"),
+  scale = .9
+)
 
 ```
+
+
 
 
 # Cohort comparisons
@@ -424,10 +451,11 @@ To determine Spring's impact on `r customer_name`'s total cost of care, we condu
 This table shows each step where participants were funneled into the analytic sample.
 ```{r data-funnel}
 
+
 match_funnel <- df_matched_orig %>% 
   group_by(spring_dummy) %>%
   summarize(
-    n = n_distinct(carrier_member_id),
+    n = n_distinct(customer_name, carrier_member_id),
     filter_name = "Maintained in matching study"
     ) %>%
   mutate(total_n = sum(n)) %>%
@@ -437,6 +465,11 @@ match_funnel <- df_matched_orig %>%
     values_from = n
   ) 
 
+# Fix different filter names
+data_funnel <- data_funnel %>%
+  mutate(filter_name = str_replace(filter_name, "No previous mental health diagnosis within", "No previous mental health treatment within"))
+
+# Print
 data_funnel %>%
   group_by(filter_name) %>%
   summarize(across(-customer_name, sum)) %>%
@@ -484,7 +517,7 @@ table1( ~ age_at_index + member_sex + mh_dx + dx_collapsed + risk_score_dx + cc_
   
   
   
-## Summarize matched data
+## Table 1: Participant characteristics for matched groups
 We matched on age, sex, mental health diagnosis, and medical spending risk scores (Department of Health and Human Services - Hierarchal Condition Categories - platinum tier). We matched on a ratio to include as many relevant participants from the comparison condition as possible. In total, we matched X spring participants to Y participants in the comparison group. After matching, the groups were essentially identical across all key characteristics. 
 
 ``` {r compare-match-groups}
@@ -518,40 +551,9 @@ df_match_table <- df_matched_orig %>%
   slice_head() %>%
   ungroup() %>%
   mutate(spring_dummy = factor(spring_dummy, labels = c("Control", "Spring Health"))) 
-  
-
-# Add labels
-label(df_match_table$age_at_index) <- "Age"
-label(df_match_table$member_sex) <- "Sex (assigned at birth)"
-label(df_match_table$dx_imputed) <- "Mental health diagnosis"
-label(df_match_table$risk_score_dx) <- "Risk score at time of diagnosis"
-label(df_match_table$months_diagnosed) <- "Months with diagnosis"
-label(df_match_table$therapy_sessions_total) <- "Number of therapy sessions"
-label(df_match_table$session_count_total) <- "Number of behavioral health sessions, all participants"
-label(df_match_table$any_bh) <- "Engaged in outpatient behavioral health treatment"
-label(df_match_table$bh_if_engaged) <- "Number of behavioral health sessions, engagers only"
-
-# NOTE: p-value function is broken here so currently dropping
-table1( ~ age_at_index + member_sex + dx_imputed + risk_score_dx + months_diagnosed + cc_any2 + cc_asthma_copd + cc_diabetes + cc_hypertension + cc_kidney + cc_osteo + cc_cancer + excl_pregnancy | spring_dummy,
-        overall = F,
-        footnote = "This table is based on raw values. In cases where 2 matches were not achieved, weights were applied.",
-        data=df_match_table)
 
 
-# Drop median, min, max
-render.cont <- function(x) {
-    with(stats.apply.rounding(stats.default(round(x, 1)), digits=3), c("",
-        "Mean (SD)"=sprintf("%s (%s)", MEAN, SD)))
-}
-
-table1( ~ age_at_index + age_factor + member_sex + dx_imputed + risk_score_dx + months_diagnosed + any_bh + bh_if_engaged | spring_dummy,
-        overall = F,
-        render.continuous = render.cont,
-        footnote = "This table is based on raw values. In cases where 2 matches were not achieved, weights were applied.",
-        data=df_match_table)
-
-
-# This is better with p-values but formatting is ugly
+# Weighted Table 1
 library(survey)
 library(tableone)
 t1_design <- svydesign(ids = ~carrier_member_id, strata = ~spring_dummy, weights = ~weights_nn,
@@ -559,23 +561,34 @@ t1_design <- svydesign(ids = ~carrier_member_id, strata = ~spring_dummy, weights
 
 t1 <- svyCreateTableOne(
   vars = c("age_at_index", "member_sex", "dx_imputed", "risk_score_dx", "months_diagnosed",
-           "cc_asthma_copd", "cc_diabetes", "cc_hypertension", "cc_cancer", "excl_pregnancy", "any_bh", "bh_if_engaged"), 
+           "cc_asthma_copd", "cc_diabetes", "cc_hypertension", "cc_cancer", "excl_pregnancy",  "any_bh", "bh_if_engaged"), 
   strata = "spring_dummy", 
   data = t1_design) 
 
-t1 %>%
+# Make adjusted p-values
+print(t1, pDigits=10, catDigits=1, contDigits=2) %>% 
+  data.frame() %>%
+  rownames_to_column(var = "Characteristic") %>%
+  
+  # Format for kbl table
+  mutate(
+    p = ifelse(p == "<0.0000000001", .0000000001, p),
+    adj_p = p.adjust(p, method = "BH"),
+    adj_p = ifelse(adj_p >= .06, round(adj_p, 2), round(adj_p, 3)),
+    adj_p = ifelse(adj_p < .001, "< 0.001", adj_p),
+    adj_p = ifelse(adj_p > .999, " > 0.999", adj_p)
+  ) %>%
+  rename(Program = Spring.Health) %>%
+  mutate(across(everything(), ~ifelse(is.na(.), "", .))) %>%
   kableone() %>%
   kable_classic(full_width = FALSE, html_font = "Cambria") %>%
-  remove_column(5) 
-
-print(t1, pDigits=5, catDigits=3, contDigits=3) 
-p.adjust(c(.9552, .18473, 1.000, 0.99969, .00103, 0.83596, 0.74330, .00001, .02078, 0.15857, .00001, .00001), method="BH")
+  remove_column(c(4, 5))
 ```
 
   
-# Primary outcome - Medical spending
 
-## Medical spend models
+# Medical spending outcomes
+## Models
 Below are the results of the total cost of care study across the entire population and the matched group only.
 ``` {r net-spend, fig.width = 9, fig.height = 5}
 
@@ -636,7 +649,12 @@ df_matched <- df_matched %>%
 #  pivot_wider(names_from = customer_name, values_from = cust_prop) 
 
 
-## Net spending
+## Model
+m1_gross_unmatched <- lmer(med_pmpm_trunc ~ 1 + spring_dummy + spring_dummy*phase + 
+             (1 | carrier_member_id),
+           #weights = weights_nn,
+           data = df_analyze_all)
+
 m1_gross <- lmer(med_pmpm_trunc ~ 1 + spring_dummy + spring_dummy*phase + 
              (1 | carrier_member_id) +
              (1 | subclass_nn),
@@ -649,55 +667,47 @@ m1_net <- lmer(med_pmpm_trunc_net ~ 1 + spring_dummy + spring_dummy*phase +
            weights = weights_nn,
            data = df_matched)
 
-m1_mh <- lmer(med_pmpm_trunc_mh_net ~ 1 + spring_dummy + spring_dummy*phase + 
-             (1 | carrier_member_id) +
-             (1 | subclass_nn),
-           weights = weights_nn,
-           data = df_matched)
-
-m1_nonmh <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
-             (1 | carrier_member_id) +
-             (1 | subclass_nn),
-           weights = weights_nn,
-           data = df_matched)
+tab_model(m1_net,
+          pred.labels = c("Baseline PMPM", "Baseline difference (Spring - Control)", "Control pre-post change", "Diff-in-diff (Spring change - Control change)"),
+          title = "Net medical spending")
 
 # Sensitivity
-tab_model(m1_gross, m1_net, m1_mh, m1_nonmh,
+tab_model(m1_gross_unmatched, m1_gross, m1_net, 
           show.ci=F, 
           show.se=T, 
           pred.labels = c("Baseline PMPM", "Baseline difference (Spring - Control)", "Control pre-post change", "Diff-in-diff (Spring change - Control change)"),
-          dv.labels = c("Total Spend - Gross", "Total Spend - Net", "Mental Health Spend - Net", "Physical Health Spend - Net"),
-          title = "Spring effect on gross medical spending")
-
-
-# raw with bootstrapped SEs. 
-# Use residuals because we trust the shape of the regression (all binary) but not the noise
-
-set.seed(8102018)
-nboot <- 5000
-ncores <- 5
-
-cl <- makeCluster(ncores, type = "PSOCK") # make a socket cluster
-doParallel::registerDoParallel(cl)          # how the CPU knows to run in parallel
-
-# Run bootstrap
-m1_boot <- foreach(B = rep(nboot/ncores, ncores), 
-                       .combine = combine_lmeresamp,
-                       .packages = c("lmeresampler", "lme4")) %dopar% {
-                         bootstrap(m1_gross, .f = fixef, type = "residual", B = B)
-                       }
-stopCluster(cl)
-
-# Get CIs
-confint(m1_boot, type = "perc") %>%
-  select(term, estimate, lower, upper) %>%
-  mutate(across(estimate:upper, ~round(.x, 2))) %>%
-  kableone() %>%
-  kable_classic(full_width = FALSE, html_font = "Cambria")
+          dv.labels = c("No matching - Gross spending", "Matched group spending - Gross", "Total Spend - Net",
+          title = "Sensitivity analysis - Medical spending"))
 ```
 
 
-## Plot medical spend
+## Table 2: Medical spending outcomes with bootstrap standard errors
+``` {r bootstrap}
+ # set.seed(8102018)
+ # nboot <- 5000
+ # ncores <- 5
+ # 
+ # cl <- makeCluster(ncores, type = "PSOCK") # make a socket cluster
+ # doParallel::registerDoParallel(cl)          # how the CPU knows to run in parallel
+ # 
+ # # Run bootstrap
+ # m1_boot <- foreach(B = rep(nboot/ncores, ncores), 
+ #                        .combine = combine_lmeresamp,
+ #                        .packages = c("lmeresampler", "lme4")) %dopar% {
+ #                          bootstrap(m1_net, .f = fixef, type = "residual", B = B)
+ #                        }
+ # stopCluster(cl)
+ # 
+ # # Get CIs
+ # confint(m1_boot, type = "perc") %>%
+ #   select(term, estimate, lower, upper) %>%
+ #   mutate(across(estimate:upper, ~round(.x, 2))) %>%
+ #   kableone() %>%
+ #   kable_classic(full_width = FALSE, html_font = "Cambria")
+```
+
+
+## Figure 2: Net medical spending
 ``` {r plot-med-spending-results, fig.width = 6, fig.height = 4}
 df_plot <- df_matched %>%
   ungroup() %>%
@@ -711,12 +721,11 @@ df_plot <- df_matched %>%
   mutate(phase_label = factor(phase_label, levels = c("Before MH diagnosis", "After MH diagnosis")))
 
 df_plot_total <- predictions(m1_net, newdata = df_plot, re.form = ~0)
-df_plot_mh <- predictions(m1_mh, newdata = df_plot, re.form = ~0) 
-df_plot_nonmh <- predictions(m1_nonmh, newdata = df_plot, re.form = ~0)
 
-color_scheme <- c('#c7c7c7', "#37837c")
 
 # Overall with error bars
+color_scheme <- c('#c7c7c7', "#37837c")
+
 ggplot(df_plot_total, aes(x=phase_label, y=estimate, ymin=conf.low, ymax=conf.high, group = spring_dummy, color = spring_dummy)) +
   geom_errorbar(width = 0.05) +
   geom_point(size=3) +
@@ -726,7 +735,7 @@ ggplot(df_plot_total, aes(x=phase_label, y=estimate, ymin=conf.low, ymax=conf.hi
   theme_modern() +
   theme(legend.position = "bottom") +
   labs(
-    title = "Spend trajectories for Spring Health versus control group",
+    title = "Spend trajectories for Program group versus matched control",
     x = "",
     y = "PMPM allowed amount",
     color = ""
@@ -783,12 +792,301 @@ m1_rx_truncate2.5k <- lmer(rx_pmpm_trunc2.5k ~ 1 + spring_dummy + spring_dummy*p
            weights = weights_nn,
            data = df_matched)
 
+tab_model(m1_rx_yes_match,
+          show.ci=T, 
+          show.se=T, 
+          pred.labels = c("Baseline PMPM", "Baseline difference (Spring - Control)", "Control pre-post change", "Diff-in-diff (Spring change - Control change)"),
+          title = "Spring effect on net pharmacy spending")
+
+
 tab_model(m1_rx_yes_match, m1_rx_truncate10k, m1_rx_truncate5k, m1_rx_truncate2.5k, show.ci=F, show.se=T, 
           pred.labels = c("Baseline PMPM", "Baseline difference (Spring - Control)", "Control pre-post change", "Diff-in-diff (Spring change - Control change)"),
           dv.labels = c("Matched - Standard truncation", "Any baseline pharm spend", "Truncate 10k", "Truncate 5k", "Truncate 2.5k"),
           title = "Spring effect on gross pharmacy spending")
 
 ```
+
+
+# Cost categories
+
+## Table 3: Cost categories
+``` {r cost-categories}
+# Mental health vs Physical health
+m1_mh <- lmer(med_pmpm_trunc_mh_net ~ 1 + spring_dummy + spring_dummy*phase + 
+                (1 | carrier_member_id) +
+                (1 | subclass_nn),
+              weights = weights_nn,
+              data = df_matched)
+
+m1_nonmh <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
+                   (1 | carrier_member_id) +
+                   (1 | subclass_nn),
+                 weights = weights_nn,
+                 data = df_matched)
+
+# By category
+
+cc1 <- lmer(med_pmpm_trunc_ov_mh ~ 1 + spring_dummy + spring_dummy*phase +
+              (1 | carrier_member_id) +
+              (1 | subclass_nn),
+            weights = weights_nn,
+            data = df_matched)
+
+cc2 <- lmer(med_pmpm_trunc_er_mh ~ 1 + spring_dummy + spring_dummy*phase +
+              (1 | carrier_member_id) +
+              (1 | subclass_nn),
+            weights = weights_nn,
+            data = df_matched)
+
+cc3 <- lmer(med_pmpm_trunc_hosp_op_mh ~ 1 + spring_dummy + spring_dummy*phase +
+              (1 | carrier_member_id) +
+              (1 | subclass_nn),
+            weights = weights_nn,
+            data = df_matched)
+
+cc4 <- lmer(med_pmpm_trunc_ip_mh ~ 1 + spring_dummy + spring_dummy*phase +
+              (1 | carrier_member_id) +
+              (1 | subclass_nn),
+            weights = weights_nn,
+            data = df_matched)
+
+cc5 <- lmer(med_pmpm_trunc_therapy_mh_net ~ 1 + spring_dummy + spring_dummy*phase +
+              (1 | carrier_member_id) +
+              (1 | subclass_nn),
+            weights = weights_nn,
+            data = df_matched)
+
+cc6 <- lmer(med_pmpm_trunc_other_mh ~ 1 + spring_dummy + spring_dummy*phase +
+              (1 | carrier_member_id) +
+              (1 | subclass_nn),
+            weights = weights_nn,
+            data = df_matched)
+
+## Non-MH
+cc7 <- lmer(med_pmpm_trunc_ov_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
+              (1 | carrier_member_id) +
+              (1 | subclass_nn),
+            weights = weights_nn,
+            data = df_matched)
+
+cc8 <- lmer(med_pmpm_trunc_er_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
+              (1 | carrier_member_id) +
+              (1 | subclass_nn),
+            weights = weights_nn,
+            data = df_matched)
+
+cc9 <- lmer(med_pmpm_trunc_hosp_op_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
+              (1 | carrier_member_id) +
+              (1 | subclass_nn),
+            weights = weights_nn,
+            data = df_matched)
+
+cc10 <- lmer(med_pmpm_trunc_ip_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
+              (1 | carrier_member_id) +
+              (1 | subclass_nn),
+            weights = weights_nn,
+            data = df_matched)
+
+cc11 <- lmer(med_pmpm_trunc_therapy_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
+              (1 | carrier_member_id) +
+              (1 | subclass_nn),
+            weights = weights_nn,
+            data = df_matched)
+
+cc12 <- lmer(med_pmpm_trunc_other_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
+              (1 | carrier_member_id) +
+              (1 | subclass_nn),
+            weights = weights_nn,
+            data = df_matched)
+
+spend_cat <- rep(c("Office visits", "Emergency room", "Hospital outpatient", "Hospital inpatient", "Behavioral Health", "Other"), 2)
+mh_spend <- c(rep("Mental health", 6), rep("Physical health", 6))
+df_cc_list <- list()
+df_table_list <- list()
+
+# Make plot data
+for (i in 1:12) {
+  df_temp <- predictions(get(paste0("cc", i)), newdata = df_plot, re.form = ~0) %>%
+    mutate(
+      spend_category = spend_cat[i],
+      mh = mh_spend[i]
+      )
+  df_cc_list[[i]] <- df_temp
+}
+
+# Make table data
+for (i in 1:12) {
+  df_temp <- hypotheses(get(paste0("cc", i)), "b4 = 0") %>%
+    mutate(
+      spend_category = spend_cat[i],
+      mh = mh_spend[i]
+      )
+  df_table_list[[i]] <- df_temp
+}
+
+df_total_spend <- rbind(
+    hypotheses(m1_mh, "b4 = 0"),
+    hypotheses(m1_nonmh, "b4 = 0")
+    ) %>%
+  data.frame(
+    spend_category = c("Total mental health", "Total physical health"),
+    mh = c("Mental health", "Physical health")
+    )
+
+
+df_table_cost_cat <- df_table_list %>% 
+  bind_rows() %>%
+  data.frame() %>%
+  rbind(df_total_spend) %>%
+  filter(!(spend_category == "Behavioral Health" & mh == "Physical health")) %>%
+  select(mh, spend_category, estimate, conf.low, conf.high, p.value) %>%
+  mutate(adj_p = p.adjust(p.value, method = "BH")) %>%
+  mutate(adj_p = ifelse(adj_p < .001, "< 0.001", round(adj_p, 3))) %>%
+  mutate(across(c(3:5), ~round(.x, 0))) %>%
+  select(-p.value) %>%
+  slice(1:6, 12, 7:11, 13) # get the rows in the correct order
+
+df_table_cost_cat %>%
+  kableone() %>%
+  kable_classic(full_width = FALSE, html_font = "Cambria") %>%
+  pack_rows(index = table(df_table_cost_cat$mh)) %>%
+  remove_column(1)
+```
+
+
+## Figure 3: Cost categories
+``` {r service-category-figures, fig.width = 12, fig.height = 9}
+df_cc_plot <- df_cc_list %>%
+  bind_rows() %>%
+  filter(phase == "post_tx") %>%
+  select(spring_dummy, spend_category, mh, estimate, conf.low, conf.high) %>%
+  mutate(spring_dummy = factor(spring_dummy, levels = c("Health Plan", "Spring"))) %>%
+  mutate(spend_category = factor(spend_category, levels = c("Office visits", "Emergency room", "Hospital outpatient", "Hospital inpatient", "Behavioral Health")))
+
+
+# Aesthetics
+y_total <- 700 # total axis scale
+y_cat <- 275 # category axis scale
+cc_colors <- c("#34a853", "grey")
+
+# Overall MH
+df_plot_mh <- predictions(m1_mh, newdata = df_plot, re.form = ~0) %>%
+  mutate(spend_category = "Mental Health - Overall") %>%
+  filter(phase == "post_tx") %>%
+  mutate(spring_dummy = ifelse(spring_dummy == "Spring", "Program", "Control"))
+
+p3 <- ggplot(df_plot_mh, aes(x=spring_dummy, y=estimate, ymin = conf.low, ymax = conf.high, fill = spring_dummy, group = spring_dummy)) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_errorbar(width = .1, color = "gray45") +
+  scale_fill_manual(values = rev(cc_colors), labels = c("Control", "Program")) +
+  geom_text(aes(x=spring_dummy, y=conf.high, label = round(estimate, 0), fill = NULL), colour = "gray35", size = 4, vjust=-0.3) +
+  scale_y_continuous(breaks = seq(0, y_total, by = 200), limits = c(0, y_total)) +
+  theme_modern() +
+  theme(panel.grid.major.y = element_line(color = "gray85")) +
+  theme(axis.text.x = element_text(size=15)) +
+  theme(axis.text.y = element_text(size=15)) +
+  theme(axis.title.x = element_text(size=18)) +
+  theme(legend.text =  element_text(size=14)) +
+  theme(
+    legend.position = "none",
+    legend.justification = "right",
+    strip.text = element_text(size=15)
+  ) +
+  labs(
+    title = "Mental Health Costs - Overall",
+    x = "",
+    y = "PMPM spend",
+    fill = " "
+  )
+fig_legend <- get_legend(p1 + theme(legend.position = "bottom"))
+
+# Overall PH
+df_plot_nonmh <- predictions(m1_nonmh, newdata = df_plot, re.form = ~0) %>%
+  filter(phase == "post_tx") %>%
+  mutate(spend_category = "Physical Health - Overall") %>%
+  mutate(spring_dummy = ifelse(spring_dummy == "Spring", "Program", "Control"))
+
+p4 <- ggplot(df_plot_nonmh, aes(x=spring_dummy, y=estimate, ymin = conf.low, ymax = conf.high, fill = spring_dummy, group = spring_dummy)) +
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_errorbar(width = .1, color = "gray45") +
+  scale_fill_manual(values = rev(cc_colors), labels = c("Control", "Program")) +
+  geom_text(aes(x=spring_dummy, y=conf.high, label = round(estimate, 0), fill = NULL), colour = "gray35", size = 4, vjust=-0.3) +
+  scale_y_continuous(breaks = seq(0, y_total, by = 200), limits = c(0, y_total)) +
+  theme_modern() +
+  theme(panel.grid.major.y = element_line(color = "gray85")) +
+  theme(axis.text.x = element_text(size=15)) +
+  theme(axis.text.y = element_text(size=15)) +
+  theme(axis.title.x = element_text(size=18)) +
+  theme(legend.text =  element_text(size=14)) +
+  theme(
+    legend.position = "none",
+    legend.justification = "right",
+    strip.text = element_text(size=15)
+  ) +
+  labs(
+    title = "Physical Health Costs - Overall",
+    x = "",
+    y = "PMPM spend",
+    fill = " "
+  )
+
+
+# MH breakdown
+p5 <- ggplot(filter(df_cc_plot, mh == "Mental health"), aes(x=spend_category, y=estimate, ymin = conf.low, ymax = conf.high, fill = spring_dummy, group = spring_dummy)) +
+  geom_bar(stat = "identity", width = 0.6, position = position_dodge()) +
+  geom_errorbar(position = position_dodge(0.6), width = .1, color = "gray45") +
+  scale_fill_manual(values = rev(cc_colors), labels = c("Control", "Program")) +
+  geom_text(aes(x=spend_category, y=conf.high, label = round(estimate, 0), fill = NULL), colour = "gray35", size = 4, vjust=-0.3, position = position_dodge(width = 0.6)) +
+  scale_x_discrete(labels = scales::label_wrap(10)) +
+  scale_y_continuous(breaks = seq(0, y_cat, by = 100), limits = c(-20, 275)) +
+  theme_modern() +
+  theme(panel.grid.major.y = element_line(color = "gray85")) +
+  theme(axis.text.x = element_text(size=15)) +
+  theme(axis.text.y = element_text(size=15)) +
+  theme(axis.title.x = element_text(size=18)) +
+  theme(legend.text =  element_text(size=14)) +
+  theme(
+    legend.position = "none",
+    legend.justification = "right",
+    strip.text = element_text(size=15)
+  ) +
+  labs(
+    title = "Mental Health Costs by Service Category",
+    x = "",
+    y = "PMPM spend",
+    fill = " "
+  )
+
+
+# PH breakdown
+p6 <- ggplot(filter(df_cc_plot, mh == "Physical health" & spend_category != "Behavioral Health"), aes(x=spend_category, y=estimate, ymin = conf.low, ymax = conf.high, fill = spring_dummy, group = spring_dummy)) +
+  geom_bar(stat = "identity", width = 0.6, position = position_dodge()) +
+  geom_errorbar(position = position_dodge(0.6), width = .1, color = "gray45") +
+  scale_fill_manual(values = rev(cc_colors), labels = c("Control", "Program")) +
+  geom_text(aes(x=spend_category, y=conf.high, label = round(estimate, 0), fill = NULL), colour = "gray35", size = 4, vjust=-0.3, position = position_dodge(width = 0.6)) +
+  scale_x_discrete(labels = scales::label_wrap(10)) +
+  scale_y_continuous(breaks = seq(0, y_cat, by = 100), limits = c(-20, 275)) +
+  theme_modern() +
+  theme(panel.grid.major.y = element_line(color = "gray85")) +
+  theme(axis.text.x = element_text(size=15)) +
+  theme(axis.text.y = element_text(size=15)) +
+  theme(axis.title.x = element_text(size=18)) +
+  theme(legend.text =  element_text(size=14)) +
+  theme(
+    legend.position = "none",
+    legend.justification = "right",
+    strip.text = element_text(size=15)
+  ) +
+  labs(
+    title = "Physical Health Costs by Service Category",
+    x = "",
+    y = "PMPM spend",
+    fill = " "
+  )
+
+cowplot::plot_grid(p3, p4, p5, p6, NA, fig_legend, nrow=3, rel_heights = c(1,1,.07))
+```
+
 
 
 # High cost conditions
@@ -860,7 +1158,7 @@ tab_model(hcc1, hcc2, hcc3, hcc4, hcc5, m_no_hcc,
 ```
 
 
-### Plot by high cost condition
+## Table 4 and Figure 4: High cost condition difference in differences
 ``` {r plot-high-cost-conditions}
 
 # Make plotting df
@@ -890,18 +1188,27 @@ df_cc_results <- df_cc_results %>%
 df_plot_hcc <- df_cc_results %>%
   mutate(
     Estimate = -1*Estimate,
-    lb = -1*lb,
-    ub = -1*ub
+    upper = -1*lb,
+    lower = -1*ub
   ) %>%
   mutate(hcc = fct_reorder(as.factor(hcc), Estimate))
 
+# Make table
+df_plot_hcc %>%
+  mutate(adj_p = p.adjust(p, method = "BH")) %>%
+  mutate(adj_p = ifelse(adj_p < .001, "< 0.001", round(adj_p, 3))) %>%
+  select(hcc, Estimate, lower, upper, adj_p) %>%
+  mutate(across(c(2:4), ~round(.x, 0))) %>%
+  kableone() %>%
+  kable_classic(full_width = FALSE, html_font = "Cambria") 
 
 # Make dotplot
-ggplot(df_plot_hcc, aes(x=Estimate, xmin=lb, xmax=ub, y=hcc)) +
+ggplot(df_plot_hcc, aes(x=Estimate, xmin=lower, xmax=upper, y=hcc)) +
   geom_pointrange(position = position_dodge(width=0.5)) +
   geom_text(aes(x=Estimate, y=hcc, label = round(Estimate, 0), fill = NULL, vjust = -1), colour = "#8e8e8e", size = 3) +
-  geom_segment(x = 0, xend=0, y=1, yend = 6.1, linetype = "dashed", color = "grey") +
+  geom_segment(x = 0, xend=0, y=0, yend = 6.1, linetype = "dashed", color = "grey") +
   annotate(geom = "text", x=0, y=6.3, label = "Cost offset", hjust=0.5, color = "grey") +
+  xlim(-500, 1400) +
   expand_limits(y = c(1, 6.5)) +
   theme_modern() +
   theme(legend.position = "bottom") +
@@ -914,234 +1221,7 @@ ggplot(df_plot_hcc, aes(x=Estimate, xmin=lb, xmax=ub, y=hcc)) +
 ```
 
 
-## Service categories
-``` {r cost-categories}
-# Mental health vs Physical health
-m1_mh <- lmer(med_pmpm_trunc_mh_net ~ 1 + spring_dummy + spring_dummy*phase + 
-                (1 | carrier_member_id) +
-                (1 | subclass_nn),
-              weights = weights_nn,
-              data = df_matched)
-
-m1_nonmh <- lmer(med_pmpm_trunc_nonmh ~ 1 + spring_dummy + spring_dummy*phase + 
-                   (1 | carrier_member_id) +
-                   (1 | subclass_nn),
-                 weights = weights_nn,
-                 data = df_matched)
-
-# By category
-
-cc1 <- lmer(med_pmpm_trunc_ov_mh ~ 1 + spring_dummy + spring_dummy*phase +
-              (1 | carrier_member_id) +
-              (1 | subclass_nn),
-            weights = weights_nn,
-            data = df_matched)
-
-cc2 <- lmer(med_pmpm_trunc_er_mh ~ 1 + spring_dummy + spring_dummy*phase +
-              (1 | carrier_member_id) +
-              (1 | subclass_nn),
-            weights = weights_nn,
-            data = df_matched)
-
-cc3 <- lmer(med_pmpm_trunc_hosp_op_mh ~ 1 + spring_dummy + spring_dummy*phase +
-              (1 | carrier_member_id) +
-              (1 | subclass_nn),
-            weights = weights_nn,
-            data = df_matched)
-
-cc4 <- lmer(med_pmpm_trunc_ip_mh ~ 1 + spring_dummy + spring_dummy*phase +
-              (1 | carrier_member_id) +
-              (1 | subclass_nn),
-            weights = weights_nn,
-            data = df_matched)
-
-cc5 <- lmer(med_pmpm_trunc_therapy_mh_net ~ 1 + spring_dummy + spring_dummy*phase +
-              (1 | carrier_member_id) +
-              (1 | subclass_nn),
-            weights = weights_nn,
-            data = df_matched)
-
-## Non-MH
-cc6 <- lmer(med_pmpm_trunc_ov_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
-              (1 | carrier_member_id) +
-              (1 | subclass_nn),
-            weights = weights_nn,
-            data = df_matched)
-
-cc7 <- lmer(med_pmpm_trunc_er_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
-              (1 | carrier_member_id) +
-              (1 | subclass_nn),
-            weights = weights_nn,
-            data = df_matched)
-
-cc8 <- lmer(med_pmpm_trunc_hosp_op_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
-              (1 | carrier_member_id) +
-              (1 | subclass_nn),
-            weights = weights_nn,
-            data = df_matched)
-
-cc9 <- lmer(med_pmpm_trunc_ip_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
-              (1 | carrier_member_id) +
-              (1 | subclass_nn),
-            weights = weights_nn,
-            data = df_matched)
-
-cc10 <- lmer(med_pmpm_trunc_therapy_nonmh ~ 1 + spring_dummy + spring_dummy*phase +
-               (1 | carrier_member_id) +
-               (1 | subclass_nn),
-             weights = weights_nn,
-             data = df_matched)
-
-spend_cat <- rep(c("Office visits", "Emergency room", "Hospital outpatient", "Hospital inpatient", "Behavioral Health"), 2)
-mh_spend <- c(rep("Mental health", 5), rep("Physical health", 5))
-df_cc_list <- list()
-
-for (i in 1:10) {
-  df_temp <- predictions(get(paste0("cc", i)), newdata = df_plot, re.form = ~0) %>%
-    mutate(
-      spend_category = spend_cat[i],
-      mh = mh_spend[i]
-      )
-  df_cc_list[[i]] <- df_temp
-}
-```
-
-
-``` {r service-category-figures, fig.width = 12, fig.height = 9}
-df_cc_plot <- df_cc_list %>%
-  bind_rows() %>%
-  filter(phase == "post_tx") %>%
-  select(spring_dummy, spend_category, mh, estimate, conf.low, conf.high) %>%
-  mutate(spring_dummy = factor(spring_dummy, levels = c("Health Plan", "Spring"))) %>%
-  mutate(spend_category = factor(spend_category, levels = c("Office visits", "Emergency room", "Hospital outpatient", "Hospital inpatient", "Behavioral Health")))
-
-
-# Aesthetics
-y_total <- 650 # total axis scale
-y_cat <- 275 # category axis scale
-cc_colors <- c("#34a853", "grey")
-
-# Overall MH
-df_plot_mh <- predictions(m1_mh, newdata = df_plot, re.form = ~0) %>%
-  mutate(spend_category = "Mental Health - Overall") %>%
-  filter(phase == "post_tx") %>%
-  mutate(spring_dummy = ifelse(spring_dummy == "Spring", "Program", "Control"))
-
-p1 <- ggplot(df_plot_mh, aes(x=spring_dummy, y=estimate, ymin = conf.low, ymax = conf.high, fill = spring_dummy, group = spring_dummy)) +
-  geom_bar(stat = "identity", width = 0.5) +
-  geom_errorbar(width = .1, color = "gray45") +
-  scale_fill_manual(values = rev(cc_colors), labels = c("Control", "Program")) +
-  geom_text(aes(x=spring_dummy, y=conf.high, label = round(estimate, 0), fill = NULL), colour = "gray35", size = 4, vjust=-0.3) +
-  scale_y_continuous(breaks = seq(0, y_total, by = 200), limits = c(0, y_total)) +
-  theme_modern() +
-  theme(panel.grid.major.y = element_line(color = "gray85")) +
-  theme(axis.text.x = element_text(size=15)) +
-  theme(axis.text.y = element_text(size=15)) +
-  theme(axis.title.x = element_text(size=18)) +
-  theme(legend.text =  element_text(size=14)) +
-  theme(
-    legend.position = "none",
-    legend.justification = "right",
-    strip.text = element_text(size=15)
-  ) +
-  labs(
-    title = "Mental Health Costs - Overall",
-    x = "",
-    y = "PMPM spend",
-    fill = " "
-  )
-fig_legend <- get_legend(p1 + theme(legend.position = "bottom"))
-
-# Overall PH
-df_plot_nonmh <- predictions(m1_nonmh, newdata = df_plot, re.form = ~0) %>%
-  filter(phase == "post_tx") %>%
-  mutate(spend_category = "Physical Health - Overall") %>%
-  mutate(spring_dummy = ifelse(spring_dummy == "Spring", "Program", "Control"))
-
-p2 <- ggplot(df_plot_nonmh, aes(x=spring_dummy, y=estimate, ymin = conf.low, ymax = conf.high, fill = spring_dummy, group = spring_dummy)) +
-  geom_bar(stat = "identity", width = 0.5) +
-  geom_errorbar(width = .1, color = "gray45") +
-  scale_fill_manual(values = rev(cc_colors), labels = c("Control", "Program")) +
-  geom_text(aes(x=spring_dummy, y=conf.high, label = round(estimate, 0), fill = NULL), colour = "gray35", size = 4, vjust=-0.3) +
-  scale_y_continuous(breaks = seq(0, y_total, by = 200), limits = c(0, y_total)) +
-  theme_modern() +
-  theme(panel.grid.major.y = element_line(color = "gray85")) +
-  theme(axis.text.x = element_text(size=15)) +
-  theme(axis.text.y = element_text(size=15)) +
-  theme(axis.title.x = element_text(size=18)) +
-  theme(legend.text =  element_text(size=14)) +
-  theme(
-    legend.position = "none",
-    legend.justification = "right",
-    strip.text = element_text(size=15)
-  ) +
-  labs(
-    title = "Physical Health Costs - Overall",
-    x = "",
-    y = "PMPM spend",
-    fill = " "
-  )
-
-
-# MH breakdown
-p3 <- ggplot(filter(df_cc_plot, mh == "Mental health"), aes(x=spend_category, y=estimate, ymin = conf.low, ymax = conf.high, fill = spring_dummy, group = spring_dummy)) +
-  geom_bar(stat = "identity", width = 0.6, position = position_dodge()) +
-  geom_errorbar(position = position_dodge(0.6), width = .1, color = "gray45") +
-  scale_fill_manual(values = rev(cc_colors), labels = c("Control", "Program")) +
-  geom_text(aes(x=spend_category, y=conf.high, label = round(estimate, 0), fill = NULL), colour = "gray35", size = 4, vjust=-0.3, position = position_dodge(width = 0.6)) +
-  scale_x_discrete(labels = scales::label_wrap(10)) +
-  scale_y_continuous(breaks = seq(0, y_cat, by = 100), limits = c(-20, 275)) +
-  theme_modern() +
-  theme(panel.grid.major.y = element_line(color = "gray85")) +
-  theme(axis.text.x = element_text(size=15)) +
-  theme(axis.text.y = element_text(size=15)) +
-  theme(axis.title.x = element_text(size=18)) +
-  theme(legend.text =  element_text(size=14)) +
-  theme(
-    legend.position = "none",
-    legend.justification = "right",
-    strip.text = element_text(size=15)
-  ) +
-  labs(
-    title = "Mental Health Costs by Service Category",
-    x = "",
-    y = "PMPM spend",
-    fill = " "
-  )
-
-
-# PH breakdown
-p4 <- ggplot(filter(df_cc_plot, mh == "Physical health" & spend_category != "Behavioral Health"), aes(x=spend_category, y=estimate, ymin = conf.low, ymax = conf.high, fill = spring_dummy, group = spring_dummy)) +
-  geom_bar(stat = "identity", width = 0.6, position = position_dodge()) +
-  geom_errorbar(position = position_dodge(0.6), width = .1, color = "gray45") +
-  scale_fill_manual(values = rev(cc_colors), labels = c("Control", "Program")) +
-  geom_text(aes(x=spend_category, y=conf.high, label = round(estimate, 0), fill = NULL), colour = "gray35", size = 4, vjust=-0.3, position = position_dodge(width = 0.6)) +
-  scale_x_discrete(labels = scales::label_wrap(10)) +
-  scale_y_continuous(breaks = seq(0, y_cat, by = 100), limits = c(-20, 275)) +
-  theme_modern() +
-  theme(panel.grid.major.y = element_line(color = "gray85")) +
-  theme(axis.text.x = element_text(size=15)) +
-  theme(axis.text.y = element_text(size=15)) +
-  theme(axis.title.x = element_text(size=18)) +
-  theme(legend.text =  element_text(size=14)) +
-  theme(
-    legend.position = "none",
-    legend.justification = "right",
-    strip.text = element_text(size=15)
-  ) +
-  labs(
-    title = "Physical Health Costs by Service Category",
-    x = "",
-    y = "PMPM spend",
-    fill = " "
-  )
-
-cowplot::plot_grid(p1, p2, p3, p4, NA, fig_legend, nrow=3, rel_heights = c(1,1,.07))
-```
-
-
-
-## Therapy moderators
+# Therapy moderators
 
 ``` {r therapy-moderators}
 
@@ -1244,90 +1324,7 @@ tab_model(m_sessions1, m_sessions2,
 
 ```
 
-## Trajectories
 
-``` {r trajectory-splines}
-library(splines)
-
-# Fit models
-m1_spline <- lmer(med_pmpm_trunc_net ~ 1 + spring_dummy + spring_dummy*phase +
-                    spring_dummy*(ns(months_post, df = 4)) +
-                    (1 | carrier_member_id) +
-                    (1 | subclass_nn),
-                  weights = weights_nn,
-                  data = df_matched)
-
-df_pred <- df_matched %>%
-  distinct(spring_dummy, phase, months, months_post)
-
-  df_plot_splines <- predictions(
-    m1_spline,
-    newdata = df_pred,
-    re.form = ~0)
- 
-
-# Plot raw
-df_matched %>%
-  group_by(spring_dummy, months) %>%
-  summarize(
-    pmpm = mean(med_pmpm_trunc_net, na.rm=T),
-    sd = sd(med_pmpm_trunc_net, na.rm=T),
-    n = n_distinct(carrier_member_id),
-    se = sd/sqrt(n)
-    ) %>%
-  filter(months <= 12) %>%
-  ggplot(., aes(x=months, y=pmpm, ymin = pmpm - 1.96*se, ymax = pmpm + 1.96*se, group = spring_dummy, color=spring_dummy)) +
-  geom_vline(xintercept = 0, linetype = "dotted") +
-  geom_pointrange() +
-  geom_line() +
-  theme_modern() +
-  theme(
-    legend.position = "none",
-    strip.text.x = element_blank()
-    ) +
-  labs(title = "Net ROI")
-
-
-## Make it disappear by plotting from launch date
-## Approximate net ROI
-df_matched %>%
-  mutate(months_from_launch = interval(spring_start_date, month_year) %/% months(1) + 1) %>%
-  group_by(spring_dummy, months_from_launch) %>%
-  summarize(
-    pmpm = mean(med_pmpm_trunc_net, na.rm=T),
-    sd = sd(med_pmpm_trunc_net, na.rm=T),
-    n = n_distinct(carrier_member_id),
-    se = sd/sqrt(n)
-    ) %>%
-  filter(months_from_launch <= 12) %>%
-  ggplot(., aes(x=months_from_launch, y=pmpm, ymin = pmpm - 1.96*se, ymax = pmpm + 1.96*se, group = spring_dummy, color=spring_dummy)) +
-  geom_vline(xintercept = 0, linetype = "dotted") +
-  geom_pointrange() +
-  geom_line() +
-  scale_color_manual(values = rev(cc_colors), labels = c("Control", "Spring Health")) +
-  theme_modern() +
-  theme(
-    legend.position = "none",
-    strip.text.x = element_blank()
-    ) +
-  labs(
-    x = "Months from Spring launch",
-    y = "PMPM ($)",
-    title = "Make it disappear by plotting from launch date")
-
-
-# Plot splines
-ggplot(df_plot_splines, aes(x=months, y=estimate, ymin = conf.low, ymax=conf.high, group = spring_dummy, color=spring_dummy)) +
-  geom_line() +
-  geom_pointrange() +
-  theme_modern() +
-  theme(
-    legend.position = "none",
-    strip.text.x = element_blank()
-  ) +
-    labs(title = "Net ROI")
-
-```
 
 ``` {r monthly-cc-breakdown, fig.width=7, fig.height=7}
 
@@ -1427,11 +1424,11 @@ df_roi <- df_matched %>%
 mean_months_treated <- sum(df_roi$member_months_treated)/sum(df_roi$n)
 
 
-# First program year gross savings %
-deltamethod(m1_gross, "0 = (6.5*b4) / ((12-6.5)*df_plot_total$estimate[1] + 6.5*(df_plot_total$estimate[2]))") # (PMPM savings / total control group spend)
+# First program year net savings %
+deltamethod(m1_net, "0 = (6.5*b4) / ((12-6.5)*df_plot_total$estimate[1] + 6.5*(df_plot_total$estimate[2]))") # (PMPM savings / total control group spend)
 
 # First Program-year PMPY
-deltamethod(m1_gross, "0 = -1 * b4 * mean_months_treated")
+deltamethod(m1_net, "0 = -1 * b4 * mean_months_treated")
 
 # Program-year ROI multiple
 deltamethod(m1_net, "0 = (1 + (-1*b4 * sum(df_roi$member_months_treated)) / total_invoiced)")
@@ -1441,7 +1438,149 @@ deltamethod(m1_net, "0 = (1 + (-1*b4 * sum(df_roi$member_months_treated)) / tota
 
 # Sensitivity analysis
 
-## Do session counts differ for individuals with high cost conditoins?
+## Doubly-robust
+``` {r doubly-robust}
+m1_doubly_robust <- lmer(med_pmpm_trunc_net ~ 1 + spring_dummy + spring_dummy*phase + 
+                           phase*(customer_name + age_at_index + member_sex + risk_score_log + dx_imputed) +
+             (1 | carrier_member_id) +
+             (1 | subclass_nn),
+           weights = weights_nn,
+           data = df_matched)
+tab_model(m1_doubly_robust, show.ci=F, show.se=T)
+```
+
+
+## GLM with design weights - alternate specification of main effect weights
+Multilevel models with design weights aren't super well-studied. Here we use an alternate specification using design weights--a common approach--and find much the same result.
+
+``` {r glm-design-weights}
+# Sensitivity - GLM with design weights
+design_test <- svydesign(
+  id = ~ subclass_nn + carrier_member_id, # members nested in customers. Order matters in this equation.
+  weights = ~weights_nn, 
+  data = df_matched) 
+
+glm_design_weights <- svyglm(med_pmpm_trunc_net ~ 1 + spring_dummy + spring_dummy*phase,
+                design = design_test)
+
+summary(glm_design_weights) 
+
+design_doubly_robust <- svyglm(med_pmpm_trunc_net ~ 1 + spring_dummy + spring_dummy*phase +
+                                 phase*(customer_name + age_at_index + member_sex + risk_score_log + dx_imputed),
+                design = design_test)
+summary(design_doubly_robust)
+```
+
+
+## Parallel trends assumption
+``` {r parallel-trends}
+
+# Assess parallel trends
+df_plot_trend <- df_matched %>%
+  group_by(spring_dummy, months) %>%
+  summarize(
+    pmpm = mean(med_pmpm_trunc_net, na.rm=T),
+    sd = sd(med_pmpm_trunc_net, na.rm=T),
+    n = n_distinct(carrier_member_id),
+    se = sd/sqrt(n)
+    ) 
+
+parallel_trend <- lmer(pmpm ~ months + spring_dummy + months*spring_dummy + (1 | carrier_member_id) + (1 | subclass_nn), data = filter(df_matched, months <= 0))
+ptrend_results <- hypotheses(parallel_trend, "b4=0") %>% mutate(across(c(2:7), ~round(.x,2)))
+
+ggplot(filter(df_plot_trend, months <= 0), aes(x=months, y=pmpm, ymin = pmpm - 1.96*se, ymax = pmpm + 1.96*se, group = spring_dummy, color=spring_dummy)) +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  geom_pointrange() +
+  geom_line() +
+  geom_smooth(method = "lm", se = F, linetype = "dashed") +
+  scale_color_manual(values = color_scheme, labels = c("Control", "Program")) +
+  annotate("text", x=-11, y=750, label = paste0("Multilevel regression test of group difference in linear trend \nb = ", ptrend_results[[2]], " [95% CI, ", ptrend_results[[6]], " to ", ptrend_results[[7]], "], p = ", ptrend_results[[5]]), size=3.5, hjust=0) +
+  ylim(100, 800) +
+  theme_modern() +
+  theme(
+    legend.position = "bottom",
+    strip.text.x = element_blank()
+    ) +
+  labs(title = "Assessment of parallel trends in the year prior to index date",
+       x = "Months prior to index date")
+
+```
+
+## Trajectory analysis
+``` {r trajectory-analysis}
+
+# Plot raw
+ggplot(df_plot_trend, aes(x=months, y=pmpm, ymin = pmpm - 1.96*se, ymax = pmpm + 1.96*se, group = spring_dummy, color=spring_dummy)) +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  geom_pointrange() +
+  geom_line() +
+  theme_modern() +
+  theme(
+    legend.position = "none",
+    strip.text.x = element_blank()
+    ) +
+  labs(title = "Net ROI")
+
+
+## Make it disappear by plotting from launch date
+## Approximate net ROI
+df_matched %>%
+  mutate(months_from_launch = interval(spring_start_date, month_year) %/% months(1) + 1) %>%
+  group_by(spring_dummy, months_from_launch) %>%
+  summarize(
+    pmpm = mean(med_pmpm_trunc_net, na.rm=T),
+    sd = sd(med_pmpm_trunc_net, na.rm=T),
+    n = n_distinct(carrier_member_id),
+    se = sd/sqrt(n)
+    ) %>%
+  filter(months_from_launch <= 12) %>%
+  ggplot(., aes(x=months_from_launch, y=pmpm, ymin = pmpm - 1.96*se, ymax = pmpm + 1.96*se, group = spring_dummy, color=spring_dummy)) +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  geom_pointrange() +
+  geom_line() +
+  scale_color_manual(values = rev(cc_colors), labels = c("Control", "Spring Health")) +
+  theme_modern() +
+  theme(
+    legend.position = "none",
+    strip.text.x = element_blank()
+    ) +
+  labs(
+    x = "Months from Spring launch",
+    y = "PMPM ($)",
+    title = "Make it disappear by plotting from launch date")
+
+
+# Make and plot splines
+## Fit spline model
+m1_spline <- lmer(med_pmpm_trunc_net ~ 1 + spring_dummy + spring_dummy*phase +
+                    spring_dummy*(ns(months_post, df = 4)) +
+                    (1 | carrier_member_id) +
+                    (1 | subclass_nn),
+                  weights = weights_nn,
+                  data = df_matched)
+
+df_pred <- df_matched %>%
+  distinct(spring_dummy, phase, months, months_post)
+
+  df_plot_splines <- predictions(
+    m1_spline,
+    newdata = df_pred,
+    re.form = ~0)
+  
+ggplot(df_plot_splines, aes(x=months, y=estimate, ymin = conf.low, ymax=conf.high, group = spring_dummy, color=spring_dummy)) +
+  geom_line() +
+  geom_pointrange() +
+  theme_modern() +
+  theme(
+    legend.position = "none",
+    strip.text.x = element_blank()
+  ) +
+    labs(title = "Net ROI")
+```
+
+
+
+## Do session counts differ for individuals with high cost conditions?
 ``` {r cc-session-counts}
 df_cc_table <- df_match_table %>%
   mutate(cc_group = case_when(
@@ -1570,7 +1709,6 @@ df_match_table <- df_match_table %>%
   
 table1( ~ any_bh + session_count_total | spring_dummy_stratified,
         overall = F,
-        render.continuous = render.cont,
         footnote = "This table is based on raw values. In cases where 2 matches were not achieved, weights were applied.",
         data=df_match_table)
 

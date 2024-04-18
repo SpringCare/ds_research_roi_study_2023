@@ -9,7 +9,7 @@ customer_name <- c("Wellstar", "Pepsi", "Hearst", "Docusign", "Tegna", "Western 
 # Load data
 df_list <- list()
 for (i in 1:length(customer_name)) {
-df_list[[i]] <- readRDS(file = paste0(Sys.getenv("claims_folder_path"), "data/roi_at_scale/", customer_name[i], "/", customer_name[i], "_analyze_all.Rdata"))
+df_list[[i]] <- readRDS(file = paste0(Sys.getenv("claims_folder_path"), "data/round_2_analysis/", customer_name[i], "/", customer_name[i], "_analyze_all.Rdata")) #roi_at_scale
 }
 
 df_analyze_all <- df_list %>%
@@ -49,8 +49,8 @@ df_risk <- df_analyze_all %>%
   )) %>%
   mutate(age_factor = droplevels(as.factor(age_factor))) %>%
   select(-c(carrier_mh_dx, spring_mh_dx)) %>%
+  filter(!is.na(risk_score_log)) %>%
   ungroup() 
-
 
 
 # Make propensity scores--------------------------------------------------------
@@ -102,9 +102,9 @@ match.final <-  matchit(spring_dummy ~ customer_name + age_at_index + member_sex
                         method = "nearest",
                         caliper = c(risk_score_log = 0.10),
                         exact = c("customer_name", "dx_imputed"),
-                        ratio = 2,
+                        ratio = 2, 
                         distance = "glm")
-
+summary(match.final)
 
 # Add matching info back to df_risk
 df_matched <- match.data(match.final, drop.unmatched = TRUE) %>%
